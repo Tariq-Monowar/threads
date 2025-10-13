@@ -13,22 +13,94 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
 model User {
-  id        String  @id @default(cuid())
-  firstName String?
-  lastName  String?
-  fullName  String?
-  email     String  @unique
+  id        String   @id @default(cuid())
+  name      String?
+  email     String   @unique
   password  String?
   avatar    String?
-
+  isOnline  Boolean  @default(false)
+  
+  // Relations
+  messages      Message[]
+  chats         ChatMember[]
+  callsMade     CallLog[] @relation("CallerCalls")
+  callsReceived CallLog[] @relation("ReceiverCalls")
+  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("users")
 }
 
-enum userStatus {
-  user
-  admin
+model Chat {
+  id        String   @id @default(cuid())
+  name      String?  // For group chats
+  isGroup   Boolean  @default(false)
+  avatar    String?
+  
+  // Relations
+  members   ChatMember[]
+  messages  Message[]
+  calls     CallLog[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("chats")
+}
+
+model ChatMember {
+  id      String   @id @default(cuid())
+  userId  String
+  chatId  String
+  
+  // Relations
+  user    User @relation(fields: [userId], references: [id])
+  chat    Chat @relation(fields: [chatId], references: [id])
+  
+  @@unique([userId, chatId])
+  @@map("chat_members")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  text      String?  // Null for media/call messages
+  type      String   @default("text") // text, image, file, location, call
+  imageUrl  String?
+  fileUrl   String?
+  latitude  Float?
+  longitude Float?
+  callDuration Int?  // in seconds
+  
+  // Relations
+  userId    String
+  chatId    String
+  user      User @relation(fields: [userId], references: [id])
+  chat      Chat @relation(fields: [chatId], references: [id])
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("messages")
+}
+
+model CallLog {
+  id          String   @id @default(cuid())
+  type        String   @default("audio")
+  duration    Int?
+  status      String   @default("completed")
+  
+  // Relations
+  callerId    String
+  receiverId  String?
+  chatId      String?
+  caller      User   @relation("CallerCalls", fields: [callerId], references: [id])
+  receiver    User?  @relation("ReceiverCalls", fields: [receiverId], references: [id])
+  chat        Chat?  @relation(fields: [chatId], references: [id])
+  
+  createdAt DateTime @default(now())
+
+  @@map("call_logs")
 }

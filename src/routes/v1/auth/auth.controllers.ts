@@ -15,7 +15,6 @@ import { v4 as uuidv4 } from "uuid";
 import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
 
-
 export const registerUser = async (request, reply) => {
   try {
     const { id, name, email, avatar, address } = request.body;
@@ -62,6 +61,68 @@ export const registerUser = async (request, reply) => {
     return reply.status(500).send({
       success: false,
       message: "Registration failed. Please try again.",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+export const updateUser = async (request, reply) => {
+  try {
+    const updateData = request.body;
+    const { id } = request.params;
+
+    if (!id) {
+      return reply.status(400).send({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const prisma = request.server.prisma;
+    const userId = parseInt(id);
+
+    // Check if user exists first
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!existingUser) {
+      return reply.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Filter out empty strings and undefined values
+    const filteredUpdateData = Object.fromEntries(
+      Object.entries(updateData).filter(([key, value]) => 
+        value !== undefined && value !== "" && value !== null
+      )
+    );
+
+    // Check if there are any valid fields to update
+    if (Object.keys(filteredUpdateData).length === 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "No valid fields provided for update",
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: filteredUpdateData,
+    });
+
+    return reply.status(200).send({
+      success: true,
+      message: "User updated successfully",
+      user: updatedUser,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Update failed",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

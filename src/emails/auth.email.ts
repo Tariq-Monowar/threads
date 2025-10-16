@@ -1,6 +1,3 @@
-
-
-
 export const otpVerificationEmailTamplate = (OTP: string): string => {
   return `
     <!DOCTYPE html>

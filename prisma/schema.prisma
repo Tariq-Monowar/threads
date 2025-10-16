@@ -1,9 +1,19 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
 model User {
-  id       String  @id @default(cuid())
+  id       Int     @id @unique
   name     String?
-  email    String  @unique
+  email    String?
   password String?
   avatar   String?
+  address  String?
 
   // Relations
   messages Message[]
@@ -18,7 +28,7 @@ model User {
 model Chat {
   id String @id @default(cuid())
 
-  //name For group chats
+  // name for group chats
   name String?
 
   isGroup Boolean @default(false)
@@ -38,10 +48,10 @@ model ChatMember {
   id String @id @default(cuid())
 
   // Relations
-  userId String?
+  userId Int? // Changed from String? to Int?
   chatId String
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  chat   Chat    @relation(fields: [chatId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  chat   Chat   @relation(fields: [chatId], references: [id])
 
   @@unique([userId, chatId])
   @@map("chat_members")
@@ -52,10 +62,10 @@ model Message {
   text String?
 
   // Relations
-  userId String? // Make optional
+  userId Int? // Changed from String? to Int?
   chatId String
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  chat   Chat    @relation(fields: [chatId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  chat   Chat   @relation(fields: [chatId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

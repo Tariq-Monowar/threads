@@ -54,7 +54,7 @@ export const registerUser = async (request, reply) => {
     return reply.status(200).send({
       success: true,
       message: "User created successfully!",
-      user: newUser,
+      data: newUser,
     });
   } catch (error) {
     request.log.error(error);
@@ -93,14 +93,12 @@ export const updateUser = async (request, reply) => {
       });
     }
 
-    // Filter out empty strings and undefined values
     const filteredUpdateData = Object.fromEntries(
-      Object.entries(updateData).filter(([key, value]) => 
-        value !== undefined && value !== "" && value !== null
+      Object.entries(updateData).filter(
+        ([key, value]) => value !== undefined && value !== "" && value !== null
       )
     );
 
-    // Check if there are any valid fields to update
     if (Object.keys(filteredUpdateData).length === 0) {
       return reply.status(400).send({
         success: false,
@@ -115,8 +113,8 @@ export const updateUser = async (request, reply) => {
 
     return reply.status(200).send({
       success: true,
-      message: "User updated successfully",
-      user: updatedUser,
+      message: "User update successfully!",
+      data: updatedUser,
     });
   } catch (error) {
     request.log.error(error);

@@ -1,18 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.registerUser = void 0;
-// {
-//             "ID": "2",
-//             "Name": "Md Sohrab Hossain",
-//             "mobile": "123",
-//             "User": "mdsohrabhossainjoy11@gmail.com",
-//             "Address": "",
-//             "Image": "sys/stores/175251547034.jpg"
-//         }
+exports.updateUser = exports.registerUser = void 0;
 const registerUser = async (request, reply) => {
     try {
-        const { id, name, email, avatar, Image, address } = request.body;
-        const missingField = ["name", "id"].find((field) => !request.body[field]);
+        const { id, name, email, avatar, address } = request.body;
+        const missingField = ["id", "name"].find((field) => !request.body[field]);
         if (missingField) {
             return reply.status(400).send({
                 success: false,
@@ -20,14 +12,13 @@ const registerUser = async (request, reply) => {
             });
         }
         const prisma = request.server.prisma;
-        const redis = request.server.redis;
-        const existingUser = await prisma.user.findUnique({
-            where: { email },
+        const existingUserById = await prisma.user.findUnique({
+            where: { id },
         });
-        if (existingUser) {
+        if (existingUserById) {
             return reply.status(400).send({
                 success: false,
-                message: "User with this email already exists",
+                message: "User with this ID already exists",
             });
         }
         const newUser = await prisma.user.create({
@@ -36,24 +27,74 @@ const registerUser = async (request, reply) => {
                 name,
                 email,
                 avatar,
-                Image,
                 address,
             },
         });
         return reply.status(200).send({
             success: true,
-            message: "user created success!",
+            message: "User created successfully!",
             user: newUser,
         });
     }
     catch (error) {
         request.log.error(error);
         return reply.status(500).send({
-            succes: false,
-            error: error,
-            message: "Internal function Error!",
+            success: false,
+            message: "Registration failed. Please try again.",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined,
         });
     }
 };
 exports.registerUser = registerUser;
+const updateUser = async (request, reply) => {
+    try {
+        const updateData = request.body;
+        const { id } = request.params;
+        if (!id) {
+            return reply.status(400).send({
+                success: false,
+                message: "User ID is required",
+            });
+        }
+        const prisma = request.server.prisma;
+        const userId = parseInt(id);
+        // Check if user exists first
+        const existingUser = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+        if (!existingUser) {
+            return reply.status(404).send({
+                success: false,
+                message: "User not found",
+            });
+        }
+        // Filter out empty strings and undefined values
+        const filteredUpdateData = Object.fromEntries(Object.entries(updateData).filter(([key, value]) => value !== undefined && value !== "" && value !== null));
+        // Check if there are any valid fields to update
+        if (Object.keys(filteredUpdateData).length === 0) {
+            return reply.status(400).send({
+                success: false,
+                message: "No valid fields provided for update",
+            });
+        }
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: filteredUpdateData,
+        });
+        return reply.status(200).send({
+            success: true,
+            message: "User updated successfully",
+            user: updatedUser,
+        });
+    }
+    catch (error) {
+        request.log.error(error);
+        return reply.status(500).send({
+            success: false,
+            message: "Update failed",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        });
+    }
+};
+exports.updateUser = updateUser;
 //# sourceMappingURL=auth.controllers.js.map

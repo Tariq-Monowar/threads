@@ -125,3 +125,69 @@ export const updateUser = async (request, reply) => {
     });
   }
 };
+
+export const getAllUsers = async (request, reply) => {
+  try {
+    const prisma = request.server.prisma;
+
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+
+    return reply.status(200).send({
+      success: true,
+      message: "Users retrieved successfully",
+      data: users,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to fetch users",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+export const deleteUser = async (request, reply) => {
+  try {
+    const { id } = request.params as { id: string };
+
+    if (!id) {
+      return reply.status(400).send({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const prisma = request.server.prisma;
+    const userId = parseInt(id);
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!existingUser) {
+      return reply.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    await prisma.user.delete({
+      where: { id: userId },
+    });
+
+    return reply.status(200).send({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to delete user",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

@@ -1,11 +1,13 @@
 import { FastifyInstance } from "fastify";
-import { registerUser, updateUser } from "./auth.controllers";
+import { registerUser, updateUser, getAllUsers, deleteUser } from "./auth.controllers";
 import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
 
 const authRoutes = (fastify: FastifyInstance) => {
   fastify.post("/set-user", registerUser);
   fastify.patch("/update-user/:id", updateUser);
+  fastify.get("/get-users", getAllUsers);
+  fastify.delete("/delete-user/:id", deleteUser);
 };
 
 export default authRoutes;

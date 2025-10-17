@@ -15,6 +15,15 @@ import { v4 as uuidv4 } from "uuid";
 import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
 
-export const createChatRoom = async (request, reply) => {
-    
+export const createConversation = async (request, reply) => {
+  try {
+
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to create chat",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
 };

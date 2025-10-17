@@ -16,8 +16,8 @@ model User {
   address  String?
 
   // Relations
-  messages Message[]
-  chats    ChatMember[]
+  messages      Message[]
+  conversations ConversationMember[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -25,36 +25,36 @@ model User {
   @@map("users")
 }
 
-model Chat {
+model Conversation {
   id String @id @default(cuid())
 
-  // name for group chats
+  // name for group conversations
   name String?
 
   isGroup Boolean @default(false)
   avatar  String?
 
   // Relations
-  members  ChatMember[]
+  members  ConversationMember[]
   messages Message[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@map("chats")
+  @@map("conversations")
 }
 
-model ChatMember {
+model ConversationMember {
   id String @id @default(cuid())
 
   // Relations
-  userId Int? // Changed from String? to Int?
-  chatId String
-  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
-  chat   Chat   @relation(fields: [chatId], references: [id])
+  userId         Int?
+  conversationId String
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  conversation   Conversation  @relation(fields: [conversationId], references: [id])
 
-  @@unique([userId, chatId])
-  @@map("chat_members")
+  @@unique([userId, conversationId])
+  @@map("conversation_members")
 }
 
 model Message {
@@ -62,10 +62,10 @@ model Message {
   text String?
 
   // Relations
-  userId Int? // Changed from String? to Int?
-  chatId String
-  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
-  chat   Chat   @relation(fields: [chatId], references: [id])
+  userId         Int?
+  conversationId String
+  user           User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  conversation   Conversation   @relation(fields: [conversationId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

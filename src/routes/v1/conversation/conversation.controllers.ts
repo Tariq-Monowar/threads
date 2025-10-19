@@ -107,3 +107,87 @@ export const getMyConversationsList = async (request, reply) => {
       .send({ success: false, message: "Failed to get conversations" });
   }
 };
+
+
+export const createGroupChat = async (request, reply) => {
+  try {
+    const { name, userIds, adminId, avatar } = request.body;
+    const prisma = request.server.prisma;
+
+    const adminIdInt = parseInt(adminId);
+    const userIdsInt = userIds.map((id) => parseInt(id));
+
+    if (!userIds || userIds.length < 2) {
+      return reply.status(400).send({
+        success: false,
+        message: "Group name and at least 2 users are required",
+      });
+    }
+
+    // Check if all users exist
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: [...userIdsInt, adminIdInt] },
+      },
+    });
+
+    if (users.length !== userIdsInt.length + 1) {
+      return reply.status(404).send({
+        success: false,
+        message: "Some users not found",
+      });
+    }
+
+    // Create group conversation with admin
+    const conversation = await prisma.conversation.create({
+      data: {
+        name,
+        isGroup: true,
+        avatar,
+        adminId: adminIdInt,
+        members: {
+          create: [
+            { userId: adminIdInt, isAdmin: true },
+            ...userIdsInt.map((userId) => ({ 
+              userId, 
+              isAdmin: false 
+            })),
+          ],
+        },
+      },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+          },
+        },
+        admin: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    return reply.send({
+      success: true,
+      message: "Group chat created successfully",
+      data: conversation,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to create group chat",
+    });
+  }
+};

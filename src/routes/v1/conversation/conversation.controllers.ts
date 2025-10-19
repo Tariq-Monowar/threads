@@ -34,7 +34,6 @@ export const createConversation = async (request, reply) => {
     const otherUserIdInt = parseInt(otherUserId);
     const myIdInt = parseInt(myId);
 
-
     // Check if conversation exists
     const existing = await prisma.conversation.findFirst({
       where: {
@@ -52,8 +51,6 @@ export const createConversation = async (request, reply) => {
     if (existing) {
       return reply.send({ success: true, data: existing });
     }
-
-
 
     // Create new conversation
     const conversation = await prisma.conversation.create({
@@ -73,5 +70,40 @@ export const createConversation = async (request, reply) => {
     return reply
       .status(500)
       .send({ success: false, message: "Failed to create chat" });
+  }
+};
+
+export const getMyConversationsList = async (request, reply) => {
+  try {
+    const { myId } = request.params;
+    const prisma = request.server.prisma;
+
+    const conversations = await prisma.conversation.findMany({
+      where: {
+        members: {
+          some: {
+            userId: parseInt(myId),
+          },
+        },
+      },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    return reply.send({ success: true, data: conversations });
+  } catch (error) {
+    return reply
+      .status(500)
+      .send({ success: false, message: "Failed to get conversations" });
   }
 };

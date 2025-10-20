@@ -39,6 +39,14 @@ model Conversation {
   adminId Int?
   admin   User? @relation(fields: [adminId], references: [id], onDelete: SetNull)
 
+  // Group permissions
+  /// false => only admin can add
+  /// false => only admin can send messages   
+  /// false => only admin can edit group name/avatar 
+  allowMemberAdd     Boolean @default(false)
+  allowMemberMessage Boolean @default(true)
+  allowEditGroupInfo Boolean @default(false)
+
   // Relations
   members  ConversationMember[]
   messages Message[]

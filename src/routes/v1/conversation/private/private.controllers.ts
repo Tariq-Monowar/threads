@@ -34,13 +34,13 @@ export const createConversation = async (request, reply) => {
     const otherUserIdInt = parseInt(otherUserId);
     const myIdInt = parseInt(myId);
 
-    // Check if conversation exists
-    const existing = await prisma.conversation.findFirst({
+    // Check if there's an active (non-deleted) conversation
+    const activeConversation = await prisma.conversation.findFirst({
       where: {
         isGroup: false,
         AND: [
-          { members: { some: { userId: myIdInt } } },
-          { members: { some: { userId: otherUserIdInt } } },
+          { members: { some: { userId: myIdInt, isDeleted: false } } },
+          { members: { some: { userId: otherUserIdInt, isDeleted: false } } },
         ],
       },
       include: {
@@ -48,11 +48,44 @@ export const createConversation = async (request, reply) => {
       },
     });
 
-    if (existing) {
-      return reply.send({ success: true, data: existing });
+    if (activeConversation) {
+      // Return existing active conversation
+      return reply.send({ success: true, data: activeConversation });
     }
 
-    // Create new conversation
+    // Check if there's a deleted conversation for the current user
+    const deletedConversation = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: myIdInt, isDeleted: true } } },
+          { members: { some: { userId: otherUserIdInt } } },
+        ],
+      },
+    });
+
+    if (deletedConversation) {
+      // Create a completely NEW conversation (fresh start)
+      const newConversation = await prisma.conversation.create({
+        data: {
+          isGroup: false,
+          members: {
+            create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
+          },
+        },
+        include: {
+          members: { include: { user: true } },
+        },
+      });
+
+      return reply.send({ 
+        success: true, 
+        data: newConversation,
+        message: "New conversation created (previous conversation was deleted)"
+      });
+    }
+
+    // Create new conversation (no previous conversation exists)
     const conversation = await prisma.conversation.create({
       data: {
         isGroup: false,
@@ -73,120 +106,41 @@ export const createConversation = async (request, reply) => {
   }
 };
 
-export const getMyConversationsList = async (request, reply) => {
+// Simple delete conversation for current user only
+export const deleteConversationForMe = async (request, reply) => {
   try {
-    const { myId } = request.params;
+    const { conversationId } = request.params;
+    const { myId } = request.body;
     const prisma = request.server.prisma;
 
-    const conversations = await prisma.conversation.findMany({
-      where: {
-        members: {
-          some: {
-            userId: parseInt(myId),
-          },
-        },
-      },
-      include: {
-        members: {
-          include: {
-            user: true,
-          },
-        },
-        messages: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-
-    return reply.send({ success: true, data: conversations });
-  } catch (error) {
-    return reply
-      .status(500)
-      .send({ success: false, message: "Failed to get conversations" });
-  }
-};
-
-export const createGroupChat = async (request, reply) => {
-  try {
-    const { name, userIds, adminId, avatar } = request.body;
-    const prisma = request.server.prisma;
-
-    const adminIdInt = parseInt(adminId);
-    const userIdsInt = userIds.map((id) => parseInt(id));
-
-    if (!userIds || userIds.length < 2) {
+    if (!conversationId || !myId) {
       return reply.status(400).send({
         success: false,
-        message: "Group name and at least 2 users are required",
+        message: "conversationId and myId are required!",
       });
     }
 
-    // Check if all users exist
-    const users = await prisma.user.findMany({
+    const myIdInt = parseInt(myId);
+
+    // Mark conversation as deleted for this user only
+    await prisma.conversationMember.updateMany({
       where: {
-        id: { in: [...userIdsInt, adminIdInt] },
+        conversationId,
+        userId: myIdInt,
       },
-    });
-
-    if (users.length !== userIdsInt.length + 1) {
-      return reply.status(404).send({
-        success: false,
-        message: "Some users not found",
-      });
-    }
-
-    // Create group conversation with admin
-    const conversation = await prisma.conversation.create({
       data: {
-        name,
-        isGroup: true,
-        avatar,
-        adminId: adminIdInt,
-        members: {
-          create: [
-            { userId: adminIdInt, isAdmin: true },
-            ...userIdsInt.map((userId) => ({ 
-              userId, 
-              isAdmin: false 
-            })),
-          ],
-        },
-      },
-      include: {
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-          },
-        },
-        admin: {
-          select: {
-            id: true,
-            name: true,
-            avatar: true,
-          },
-        },
+        isDeleted: true,
+        deletedAt: new Date(),
       },
     });
 
     return reply.send({
       success: true,
-      message: "Group chat created successfully",
-      data: conversation,
+      message: "Conversation deleted successfully",
     });
   } catch (error) {
-    request.log.error(error);
-    return reply.status(500).send({
-      success: false,
-      message: "Failed to create group chat",
-    });
+    return reply
+      .status(500)
+      .send({ success: false, message: "Failed to delete conversation" });
   }
 };

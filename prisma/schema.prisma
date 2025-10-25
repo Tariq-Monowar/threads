@@ -18,6 +18,7 @@ model User {
   // Relations
   messages      Message[]
   conversations ConversationMember[]
+  deletedMessages MessageDeletion[]
 
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -68,8 +69,14 @@ model ConversationMember {
 
   // for grup admin 
   isAdmin Boolean @default(false)
+  
+  // Simple deletion tracking - just 2 fields!
+  isDeleted Boolean @default(false)
+  deletedAt DateTime?
 
   @@unique([userId, conversationId])
+  @@index([conversationId, isDeleted]) // High-performance index for message sending
+  @@index([userId, isDeleted]) // High-performance index for conversation lists
   @@map("conversation_members")
 }
 
@@ -83,8 +90,30 @@ model Message {
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
+  // Message deletion tracking
+  isDeletedForEveryone Boolean @default(false)
+  deletedForEveryoneAt DateTime?
+  deletedForMe        MessageDeletion[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([conversationId, createdAt]) // High-performance index for message retrieval
+  @@index([conversationId, isDeletedForEveryone]) // High-performance index for message filtering
+  @@index([userId, createdAt]) // High-performance index for user message queries
   @@map("messages")
+}
+
+model MessageDeletion {
+  id String @id @default(cuid())
+  
+  messageId String
+  userId    Int
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  deletedAt DateTime @default(now())
+  
+  @@unique([messageId, userId])
+  @@map("message_deletions")
 }

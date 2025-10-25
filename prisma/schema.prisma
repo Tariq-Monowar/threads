@@ -67,16 +67,15 @@ model ConversationMember {
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
-  // for grup admin 
+
   isAdmin Boolean @default(false)
-  
-  // Simple deletion tracking - just 2 fields!
+
   isDeleted Boolean @default(false)
   deletedAt DateTime?
 
   @@unique([userId, conversationId])
-  @@index([conversationId, isDeleted]) // High-performance index for message sending
-  @@index([userId, isDeleted]) // High-performance index for conversation lists
+  @@index([conversationId, isDeleted])
+  @@index([userId, isDeleted])
   @@map("conversation_members")
 }
 
@@ -95,12 +94,16 @@ model Message {
   deletedForEveryoneAt DateTime?
   deletedForMe        MessageDeletion[]
 
+  // Message read status
+  isRead Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([conversationId, createdAt]) // High-performance index for message retrieval
-  @@index([conversationId, isDeletedForEveryone]) // High-performance index for message filtering
-  @@index([userId, createdAt]) // High-performance index for user message queries
+  @@index([conversationId, createdAt])
+  @@index([conversationId, isDeletedForEveryone])
+  @@index([conversationId, isRead])
+  @@index([userId, createdAt])
   @@map("messages")
 }
 

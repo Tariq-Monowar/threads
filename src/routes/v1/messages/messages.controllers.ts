@@ -15,207 +15,6 @@ import { v4 as uuidv4 } from "uuid";
 import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
 
-export const createConversation = async (request, reply) => {
-  try {
-    const { otherUserId, myId } = request.body;
-
-    const prisma = request.server.prisma;
-
-    const missingField = ["otherUserId", "myId"].find(
-      (field) => !request.body[field]
-    );
-
-    if (missingField) {
-      return reply.status(400).send({
-        success: false,
-        message: `${missingField} is required!`,
-      });
-    }
-
-    const otherUser = await prisma.user.findUnique({
-      where: {
-        id: otherUserId,
-      },
-      select: { id: true, name: true },
-    });
-
-    if (!otherUser) {
-      return reply.status(404).send({
-        success: false,
-        message: "Other user not found",
-      });
-    }
-
-    if (myId === otherUserId) {
-      return reply.status(400).send({
-        success: false,
-        message: "Cannot create conversation with yourself",
-      });
-    }
-
-    const activeConversation = await prisma.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [
-          {
-            members: {
-              some: {
-                userId: myId,
-                isDeleted: false,
-              },
-            },
-          },
-          {
-            members: {
-              some: {
-                userId: otherUserId,
-                isDeleted: false,
-              },
-            },
-          },
-        ],
-      },
-      include: {
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-          },
-        },
-        messages: {
-          orderBy: {
-            createdAt: "desc",
-          },
-          take: 1,
-        },
-      },
-    });
-
-    if (activeConversation) {
-      return reply.status(200).send({
-        success: true,
-        message: "Conversation already exists",
-        data: {
-          conversation: activeConversation,
-        },
-      });
-    }
-
-    const deletedConversation = await prisma.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [
-          {
-            members: {
-              some: {
-                userId: myId,
-                isDeleted: true,
-              },
-            },
-          },
-          {
-            members: {
-              some: {
-                userId: otherUserId,
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    if (deletedConversation) {
-      const newConversation = await prisma.conversation.create({
-        data: {
-          isGroup: false,
-          members: {
-            create: [{ userId: myId }, { userId: otherUserId }],
-          },
-        },
-        include: {
-          members: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  avatar: true,
-                },
-              },
-            },
-          },
-          messages: {
-            orderBy: {
-              createdAt: "desc",
-            },
-            take: 1,
-          },
-        },
-      });
-
-      return reply.status(201).send({
-        success: true,
-        message: "New conversation created (previous conversation was deleted)",
-        data: {
-          conversation: newConversation,
-        },
-      });
-    }
-
-    const conversation = await prisma.conversation.create({
-      data: {
-        isGroup: false,
-        members: {
-          create: [{ userId: myId }, { userId: otherUserId }],
-        },
-      },
-      include: {
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-          },
-        },
-        messages: {
-          orderBy: {
-            createdAt: "desc",
-          },
-          take: 1,
-        },
-      },
-    });
-
-    return reply.status(201).send({
-      success: true,
-      message: "Conversation created successfully",
-      data: {
-        conversation,
-      },
-    });
-
-  } catch (error) {
-    request.log.error(error);
-    return reply.status(500).send({
-      success: false,
-      message: "Failed to create chat",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
 export const deleteMessage = async (request, reply) => {
   try {
     const { messageId } = request.params;
@@ -264,7 +63,6 @@ export const deleteMessage = async (request, reply) => {
     });
   }
 };
-
 
 export const sendMessage = async (request, reply) => {
   try {
@@ -429,7 +227,6 @@ export const deleteMessageForMe = async (request, reply) => {
   }
 };
 
-
 export const deleteMessageForEveryone = async (request, reply) => {
   try {
     const { messageId } = request.params;
@@ -491,6 +288,68 @@ export const deleteMessageForEveryone = async (request, reply) => {
   }
 };
 
+export const markMultipleMessagesAsRead = async (request, reply) => {
+  try {
+    const { conversationId } = request.params;
+    const prisma = request.server.prisma;
+
+    if (!conversationId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId is required!",
+      });
+    }
+
+    const unreadMessages = await prisma.message.findMany({
+      where: {
+        conversationId,
+        isRead: false,
+        isDeletedForEveryone: false,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (unreadMessages.length === 0) {
+      return reply.send({
+        success: true,
+        message: "All messages already marked as read",
+        data: {
+          markedCount: 0,
+          totalUnreadMessages: 0,
+        },
+      });
+    }
+
+    const result = await prisma.message.updateMany({
+      where: {
+        conversationId,
+        isRead: false,
+        isDeletedForEveryone: false,
+      },
+      data: {
+        isRead: true,
+      },
+    });
+
+    return reply.send({
+      success: true,
+      message: "Messages marked as read",
+      data: {
+        markedCount: result.count,
+        totalUnreadMessages: unreadMessages.length,
+      },
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to mark messages as read",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
 
 export const getMessages = async (request, reply) => {
   try {

@@ -96,7 +96,9 @@ export const sendMessage = async (request, reply) => {
       });
 
       if (!conversation) {
-        throw new Error("Conversation not found or you don't have access to it");
+        throw new Error(
+          "Conversation not found or you don't have access to it"
+        );
       }
 
       const [message] = await Promise.all([
@@ -126,15 +128,21 @@ export const sendMessage = async (request, reply) => {
       return message;
     });
 
-    return reply.status(201).send({
+    const response = {
       success: true,
       message: "Message sent successfully",
       data: result,
-    });
+    };
+
+    request.server.io.to(conversationId).emit("new_message", response);
+
+    return reply.status(201).send(response);
   } catch (error) {
     request.log.error(error);
-    
-    if (error.message === "Conversation not found or you don't have access to it") {
+
+    if (
+      error.message === "Conversation not found or you don't have access to it"
+    ) {
       return reply.status(404).send({
         success: false,
         message: error.message,
@@ -354,11 +362,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
 export const getMessages = async (request, reply) => {
   try {
     const { conversationId } = request.params;
-    const { 
-      myId, 
-      page = 1, 
-      limit = 10 
-    } = request.query;
+    const { myId, page = 1, limit = 10 } = request.query;
     const prisma = request.server.prisma;
 
     if (!conversationId || !myId) {
@@ -369,7 +373,10 @@ export const getMessages = async (request, reply) => {
     }
 
     const pageInt = Math.max(parseInt(page.toString()) || 1, 1);
-    const limitInt = Math.min(Math.max(parseInt(limit.toString()) || 10, 1), 100);
+    const limitInt = Math.min(
+      Math.max(parseInt(limit.toString()) || 10, 1),
+      100
+    );
     const offset = (pageInt - 1) * limitInt;
 
     const myIdInt = parseInt(myId);
@@ -416,7 +423,6 @@ export const getMessages = async (request, reply) => {
       skip: offset,
       take: limitInt + 1,
     });
-
 
     const hasMore = messages.length > limitInt;
     const actualMessages = hasMore ? messages.slice(0, limitInt) : messages;

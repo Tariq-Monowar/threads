@@ -134,6 +134,7 @@ export const sendMessage = async (request, reply) => {
       data: result,
     };
 
+    // Emit to conversation room (exclude sender)
     request.server.io.to(conversationId).emit("new_message", response);
 
     return reply.status(201).send(response);
@@ -299,14 +300,17 @@ export const deleteMessageForEveryone = async (request, reply) => {
 export const markMultipleMessagesAsRead = async (request, reply) => {
   try {
     const { conversationId } = request.params;
+    const { myId } = request.body;
     const prisma = request.server.prisma;
 
-    if (!conversationId) {
+    if (!conversationId || !myId) {
       return reply.status(400).send({
         success: false,
-        message: "conversationId is required!",
+        message: "conversationId and myId are required!",
       });
     }
+
+    const myIdInt = parseInt(myId);
 
     const unreadMessages = await prisma.message.findMany({
       where: {
@@ -339,6 +343,14 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       data: {
         isRead: true,
       },
+    });
+
+    // Emit read receipts to conversation
+    request.server.io.to(conversationId).emit("messages_marked_read", {
+      conversationId,
+      userId: myIdInt,
+      markedCount: result.count,
+      messageIds: unreadMessages.map(m => m.id)
     });
 
     return reply.send({

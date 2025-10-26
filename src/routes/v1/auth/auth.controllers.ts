@@ -1,4 +1,3 @@
-
 export const registerUser = async (request, reply) => {
   try {
     const { id, name, email, avatar, address } = request.body;
@@ -181,20 +180,42 @@ export const myinfo = async (request, reply) => {
     const { myId } = request.params;
     const prisma = request.server.prisma;
 
+    // Convert string to number
+    const id = Number(myId);
+
+    // Validate that it's a real number
+    if (isNaN(id)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID — must be a number",
+      });
+    }
+
+    // Query Prisma with an Int (not String)
     const user = await prisma.user.findUnique({
-      where: {
-        id: parseInt(myId),
-      },  
+      where: { id },
     });
 
     if (!user) {
-      return reply.status(404).send({ success: false, message: "User not found" });
+      return reply.status(404).send({
+        success: false,
+        message: "User not found",
+      });
     }
 
-    return reply.send({ success: true, data: user });
+    return reply.send({
+      success: true,
+      data: user,
+    });
   } catch (error) {
-    return reply
-      .status(500)
-      .send({ success: false, message: "Failed to get user info" });
+    console.error("Error in myinfo:", error);
+    return reply.status(500).send({
+      success: false,
+      error: error.message,
+      message: "Failed to get user info",
+    });
   }
 };
+
+
+

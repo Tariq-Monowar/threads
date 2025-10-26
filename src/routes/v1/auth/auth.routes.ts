@@ -4,7 +4,7 @@ import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
 
 const authRoutes = (fastify: FastifyInstance) => {
-  fastify.post("/me/:id", myinfo);
+  fastify.get("/me/:myId", myinfo);
   fastify.post("/set-user", registerUser);
   fastify.patch("/update-user/:id", updateUser);
   fastify.get("/get-users", getAllUsers);

@@ -175,3 +175,26 @@ export const deleteUser = async (request, reply) => {
     });
   }
 };
+
+export const myinfo = async (request, reply) => {
+  try {
+    const { myId } = request.params;
+    const prisma = request.server.prisma;
+
+    const user = await prisma.user.findUnique({
+      where: {
+        id: parseInt(myId),
+      },  
+    });
+
+    if (!user) {
+      return reply.status(404).send({ success: false, message: "User not found" });
+    }
+
+    return reply.send({ success: true, data: user });
+  } catch (error) {
+    return reply
+      .status(500)
+      .send({ success: false, message: "Failed to get user info" });
+  }
+};

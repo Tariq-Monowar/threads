@@ -24,11 +24,51 @@ export default fp(async (fastify) => {
     fastify.log.info(`Socket connected: ${socket.id}`);
 
     // --- USER JOIN EVENT ---
-    // User connects and joins their personal room
-    socket.on("join", (userId: string) => {
+    // User connects and joins their personal room + ALL their conversations automatically
+    socket.on("join", async (userId: string) => {
       onlineUsers.set(userId, socket.id);
       socket.join(userId);
       fastify.log.info(`User ${userId} joined personal room`);
+      
+      // Automatically join ALL user's conversations (Backend fetches from DB)
+      try {
+        const userIdInt = parseInt(userId);
+        const conversations = await fastify.prisma.conversation.findMany({
+          where: {
+            members: {
+              some: {
+                userId: userIdInt,
+                isDeleted: false,
+              },
+            },
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        // Join all conversations at once (BULK JOIN - Professional Approach)
+        conversations.forEach((conv) => {
+          socket.join(conv.id);
+        });
+
+        fastify.log.info(
+          `User ${userId} automatically joined ${conversations.length} conversations`
+        );
+
+        // Notify others in each conversation
+        conversations.forEach((conv) => {
+          socket.to(conv.id).emit("user_joined_conversation", {
+            conversationId: conv.id,
+            userId,
+          });
+        });
+      } catch (error: any) {
+        fastify.log.error(
+          `Error fetching conversations for user ${userId}: ${error?.message || String(error)}`
+        );
+      }
+
       io.emit("online-users", Array.from(onlineUsers.keys()));
     });
 

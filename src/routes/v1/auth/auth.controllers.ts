@@ -217,5 +217,110 @@ export const myinfo = async (request, reply) => {
   }
 };
 
+export const searchUsers = async (request, reply) => {
+  try {
+    const { myId } = request.params;
+    console.log("myId", myId);
+    const { search, page = 1, limit = 20 } = request.query;
 
+    console.log("search", search);
+    console.log("page", page);
+    console.log("limit", limit);
 
+    const currentUserId = Number(myId);
+    if (isNaN(currentUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID — must be a number",
+      });
+    }
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const prisma = request.server.prisma;
+
+    let whereCondition: any = {
+      id: { not: currentUserId },
+    };
+
+    if (search && search.trim() !== "") {
+      whereCondition.OR = [
+        {
+          name: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          email: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+      ];
+    }
+
+    const [users, totalCount] = await Promise.all([
+      prisma.user.findMany({
+        where: whereCondition,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+          address: true,
+          createdAt: true,
+        },
+        orderBy: [{ name: "asc" }, { createdAt: "desc" }],
+        skip,
+        take: limitNum,
+      }),
+      prisma.user.count({
+        where: whereCondition,
+      }),
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
+
+    if (!search) {
+      return reply.status(200).send({
+        success: true,
+        message: "Users retrieved successfully",
+        data: [],
+        pagination: {
+          currentPage: pageNum,
+          totalPages,
+          totalCount,
+          hasNextPage,
+          hasPrevPage,
+          limit: limitNum,
+        },
+      });
+    }
+
+    return reply.status(200).send({
+      success: true,
+      message: "Users retrieved successfully",
+      data: users,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalCount,
+        hasNextPage,
+        hasPrevPage,
+        limit: limitNum,
+      },
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Search failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

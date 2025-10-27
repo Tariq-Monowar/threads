@@ -18,12 +18,13 @@ model User {
   // Relations
   messages      Message[]
   conversations ConversationMember[]
-  deletedMessages MessageDeletion[]
 
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   Conversation Conversation[]
 
+  @@index([name])
+  @@index([email])
   @@map("users")
 }
 
@@ -67,15 +68,12 @@ model ConversationMember {
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
-
   isAdmin Boolean @default(false)
-
-  isDeleted Boolean @default(false)
-  deletedAt DateTime?
+  
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
 
   @@unique([userId, conversationId])
-  @@index([conversationId, isDeleted])
-  @@index([userId, isDeleted])
   @@map("conversation_members")
 }
 
@@ -89,34 +87,11 @@ model Message {
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
-  // Message deletion tracking
-  isDeletedForEveryone Boolean @default(false)
-  deletedForEveryoneAt DateTime?
-  deletedForMe        MessageDeletion[]
-
-  // Message read status
-  isRead Boolean @default(false)
+  // Soft delete - ADD THIS
+  deletedForUsers Int[] @default([])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([conversationId, createdAt])
-  @@index([conversationId, isDeletedForEveryone])
-  @@index([conversationId, isRead])
-  @@index([userId, createdAt])
   @@map("messages")
-}
-
-model MessageDeletion {
-  id String @id @default(cuid())
-  
-  messageId String
-  userId    Int
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  deletedAt DateTime @default(now())
-  
-  @@unique([messageId, userId])
-  @@map("message_deletions")
 }

@@ -143,7 +143,6 @@ export const sendMessage = async (request, reply) => {
       data: transactionResult.message,
     };
 
-    // Emit to all conversation members (exclude sender)
     transactionResult.members
       .filter((member) => member.userId !== userIdInt)
       .forEach((member) => {

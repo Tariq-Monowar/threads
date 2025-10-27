@@ -82,7 +82,7 @@ export const sendMessage = async (request, reply) => {
 
     const userIdInt = parseInt(userId);
 
-    const result = await prisma.$transaction(async (tx) => {
+    const transactionResult = await prisma.$transaction(async (tx) => {
       const conversation = await tx.conversation.findFirst({
         where: {
           id: conversationId,
@@ -101,7 +101,7 @@ export const sendMessage = async (request, reply) => {
         );
       }
 
-      const [message] = await Promise.all([
+      const [message, members] = await Promise.all([
         tx.message.create({
           data: {
             text,
@@ -119,23 +119,38 @@ export const sendMessage = async (request, reply) => {
             },
           },
         }),
+        tx.conversationMember.findMany({
+          where: {
+            conversationId,
+            isDeleted: false,
+          },
+          select: {
+            userId: true,
+          },
+        }),
         tx.conversation.update({
           where: { id: conversationId },
           data: { updatedAt: new Date() },
         }),
       ]);
 
-      return message;
+      return { message, members };
     });
 
     const response = {
       success: true,
       message: "Message sent successfully",
-      data: result,
+      data: transactionResult.message,
     };
 
-    // Emit to conversation room (exclude sender)
-    request.server.io.to(conversationId).emit("new_message", response);
+    // Emit to all conversation members (exclude sender)
+    transactionResult.members
+      .filter((member) => member.userId !== userIdInt)
+      .forEach((member) => {
+        if (member.userId) {
+          request.server.io.to(member.userId.toString()).emit("new_message", response);
+        }
+      });
 
     return reply.status(201).send(response);
   } catch (error) {
@@ -334,24 +349,41 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       });
     }
 
-    const result = await prisma.message.updateMany({
-      where: {
-        conversationId,
-        isRead: false,
-        isDeletedForEveryone: false,
-      },
-      data: {
-        isRead: true,
-      },
-    });
+    const [result, members] = await Promise.all([
+      prisma.message.updateMany({
+        where: {
+          conversationId,
+          isRead: false,
+          isDeletedForEveryone: false,
+        },
+        data: {
+          isRead: true,
+        },
+      }),
+      prisma.conversationMember.findMany({
+        where: {
+          conversationId,
+          isDeleted: false,
+        },
+        select: {
+          userId: true,
+        },
+      }),
+    ]);
 
-    // Emit read receipts to conversation
-    request.server.io.to(conversationId).emit("messages_marked_read", {
-      conversationId,
-      userId: myIdInt,
-      markedCount: result.count,
-      messageIds: unreadMessages.map(m => m.id)
-    });
+    // Emit read receipts to all conversation members (exclude sender)
+    members
+      .filter((member) => member.userId !== myIdInt)
+      .forEach((member) => {
+        if (member.userId) {
+          request.server.io.to(member.userId.toString()).emit("messages_marked_read", {
+            conversationId,
+            userId: myIdInt,
+            markedCount: result.count,
+            messageIds: unreadMessages.map(m => m.id)
+          });
+        }
+      });
 
     return reply.send({
       success: true,

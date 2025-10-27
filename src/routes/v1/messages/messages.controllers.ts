@@ -332,7 +332,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         isRead: false,
         isDeletedForEveryone: false,
         NOT: {
-          userId: myIdInt, // Exclude user's own messages
+          userId: myIdInt,
         },
       },
       select: {
@@ -358,7 +358,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
           isRead: false,
           isDeletedForEveryone: false,
           NOT: {
-            userId: myIdInt, // Exclude user's own messages
+            userId: myIdInt,
           },
         },
         data: {
@@ -376,28 +376,30 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       }),
     ]);
 
-    // Emit read receipts to all conversation members (exclude sender)
-    members
-      .filter((member) => member.userId !== myIdInt)
-      .forEach((member) => {
-        if (member.userId) {
-          request.server.io.to(member.userId.toString()).emit("messages_marked_read", {
-            conversationId,
-            userId: myIdInt,
-            markedCount: result.count,
-            messageIds: unreadMessages.map(m => m.id)
-          });
-        }
-      });
+    const readStatusData = {
+      success: true,
+      conversationId,
+      markedBy: myIdInt,
+      markedCount: result.count,
+      messageIds: unreadMessages.map(m => m.id),
+    };
 
-    return reply.send({
+    members.forEach((member) => {
+      if (member.userId) {
+        request.server.io.to(member.userId.toString()).emit("messages_marked_read", readStatusData);
+      }
+    });
+
+    const responseData = {
       success: true,
       message: "Messages marked as read",
       data: {
         markedCount: result.count,
         totalUnreadMessages: unreadMessages.length,
       },
-    });
+    };
+
+    return reply.send(responseData);
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({

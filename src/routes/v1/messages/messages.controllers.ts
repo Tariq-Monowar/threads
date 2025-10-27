@@ -331,6 +331,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         conversationId,
         isRead: false,
         isDeletedForEveryone: false,
+        NOT: {
+          userId: myIdInt, // Exclude user's own messages
+        },
       },
       select: {
         id: true,
@@ -354,6 +357,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
           conversationId,
           isRead: false,
           isDeletedForEveryone: false,
+          NOT: {
+            userId: myIdInt, // Exclude user's own messages
+          },
         },
         data: {
           isRead: true,

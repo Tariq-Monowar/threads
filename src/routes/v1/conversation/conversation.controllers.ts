@@ -110,23 +110,45 @@ export const getMyConversationsList = async (request, reply) => {
       return [...currentUser, ...others].slice(0, 3);
     };
 
-    const transformedConversations = conversations.map((conv) => ({
-      ...conv,
-      members: processMembers(conv.members, conv.isGroup),
-      messages: conv.messages.map((msg) => ({
-        id: msg.id,
-        text: msg.text,
-        userId: msg.userId,
-        conversationId: msg.conversationId,
-        isDeletedForEveryone: msg.isDeletedForEveryone,
-        deletedForEveryoneAt: msg.deletedForEveryoneAt,
-        isRead: msg.isRead,
-        createdAt: msg.createdAt,
-        updatedAt: msg.updatedAt,
-        user: formatUser(msg.user),
-      })),
-      avatar: conv.avatar ? getImageUrl(conv.avatar) : null,
-    }));
+    const transformedConversations = await Promise.all(
+      conversations.map(async (conv) => {
+        // Count unread messages excluding user's own messages
+        const unreadCount = await prisma.message.count({
+          where: {
+            conversationId: conv.id,
+            isRead: false,
+            isDeletedForEveryone: false,
+            userId: {
+              not: parseInt(myId),
+            },
+            deletedForMe: {
+              none: {
+                userId: parseInt(myId),
+              },
+            },
+          },
+        });
+
+        return {
+          ...conv,
+          members: processMembers(conv.members, conv.isGroup),
+          messages: conv.messages.map((msg) => ({
+            id: msg.id,
+            text: msg.text,
+            userId: msg.userId,
+            conversationId: msg.conversationId,
+            isDeletedForEveryone: msg.isDeletedForEveryone,
+            deletedForEveryoneAt: msg.deletedForEveryoneAt,
+            isRead: msg.isRead,
+            createdAt: msg.createdAt,
+            updatedAt: msg.updatedAt,
+            user: formatUser(msg.user),
+          })),
+          avatar: conv.avatar ? getImageUrl(conv.avatar) : null,
+          unreadCount,
+        };
+      })
+    );
 
     const totalPages = Math.ceil(totalItems / limitNum);
     const hasNextPage = pageNum < totalPages;

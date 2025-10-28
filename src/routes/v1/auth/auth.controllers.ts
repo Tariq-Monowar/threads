@@ -324,3 +324,149 @@ export const searchUsers = async (request, reply) => {
     });
   }
 };
+
+
+
+export const syncUsers = async (request, reply) => {
+  try {
+    const prisma = request.server.prisma;
+
+    // 1️⃣ Prepare form data
+    const formData = new URLSearchParams();
+    formData.append("admin_user", "aminbd");
+
+    // 2️⃣ Make POST request to external API
+    const response = await fetch(
+      "https://deficall.defilinkteam.org/api/profile_list.php",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formData.toString(),
+      }
+    );
+
+    // 3️⃣ Check if response is OK
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    // 4️⃣ Parse JSON response
+    const res = await response.json();
+    
+    // 5️⃣ Log the full response for debugging
+    request.log.info("Full API response:", JSON.stringify(res, null, 2));
+
+    // 6️⃣ Validate response with more detailed checks
+    if (!res) {
+      request.log.error("Empty API response");
+      return reply.status(500).send({
+        success: false,
+        message: "External API returned empty response",
+      });
+    }
+
+    if (res.success === false) {
+      request.log.error("API returned success: false", res);
+      return reply.status(500).send({
+        success: false,
+        message: "External API returned error",
+        apiError: res.message || res.error || "Unknown API error"
+      });
+    }
+
+    // Check multiple possible response structures
+    let externalUsers = null;
+    
+    if (Array.isArray(res.data?.report)) {
+      externalUsers = res.data.report;
+    } else if (Array.isArray(res.report)) {
+      externalUsers = res.report;
+    } else if (Array.isArray(res.data)) {
+      externalUsers = res.data;
+    } else if (Array.isArray(res)) {
+      externalUsers = res;
+    } else if (res.data && typeof res.data === 'object') {
+      // If data is an object, try to convert it to array
+      externalUsers = Object.values(res.data);
+    }
+
+    if (!externalUsers || !Array.isArray(externalUsers)) {
+      request.log.error("Invalid users data structure:", {
+        data: res.data,
+        report: res.report,
+        fullResponse: res
+      });
+      return reply.status(500).send({
+        success: false,
+        message: "External API returned invalid user data structure",
+        responseStructure: Object.keys(res)
+      });
+    }
+
+    if (externalUsers.length === 0) {
+      request.log.warn("External API returned empty users array");
+      return reply.send({
+        success: true,
+        message: "Sync completed - no users found in external API",
+        data: []
+      });
+    }
+
+    // 7️⃣ Delete all existing users
+    await prisma.user.deleteMany({});
+    request.log.info("Deleted all existing users");
+
+    // 8️⃣ Map API fields to Prisma User model with validation
+    const usersToInsert = externalUsers
+      .map((user, index) => {
+        try {
+          // Validate required fields
+          if (!user.ID && !user.id) {
+            request.log.warn(`User at index ${index} missing ID:`, user);
+            return null;
+          }
+
+          return {
+            id: parseInt(user.ID || user.id || user.user_id || index),
+            name: user.Name || user.name || user.username || "",
+            email: user.User || user.user || user.email || user.Email || "",
+            avatar: user.Image || user.image || user.avatar || user.profile_picture || "",
+            address: user.Address || user.address || user.wallet_address || "",
+          };
+        } catch (error) {
+          request.log.warn(`Failed to process user at index ${index}:`, user, error);
+          return null;
+        }
+      })
+      .filter(user => user !== null); // Remove null entries
+
+    if (usersToInsert.length === 0) {
+      request.log.error("No valid users to insert after processing");
+      return reply.status(500).send({
+        success: false,
+        message: "No valid users found to insert",
+      });
+    }
+
+    // 9️⃣ Insert new users
+    await prisma.user.createMany({
+      data: usersToInsert,
+      skipDuplicates: true,
+    });
+    request.log.info(`Inserted ${usersToInsert.length} users from external API`);
+
+    // 🔟 Return success
+    return reply.send({
+      success: true,
+      message: `Users synced successfully! Total inserted: ${usersToInsert.length}`,
+      data: usersToInsert,
+    });
+  } catch (error) {
+    request.log.error("Sync failed with error:", error);
+    return reply.status(500).send({
+      success: false,
+      message: "Sync failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

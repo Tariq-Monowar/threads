@@ -5,7 +5,8 @@ import {
   getAllUsers,
   deleteUser,
   myinfo,
-  searchUsers
+  searchUsers,
+  syncUsers
 } from "./auth.controllers";
 import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
@@ -17,6 +18,12 @@ const authRoutes = (fastify: FastifyInstance) => {
   fastify.get("/get-users", getAllUsers);
   fastify.delete("/delete-user/:id", deleteUser);
    fastify.get("/search-users/:myId", searchUsers);
+
+   fastify.post("/search-users/load-data", syncUsers);
+
+
+
+
 };
 
 export default authRoutes;

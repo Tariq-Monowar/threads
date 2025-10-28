@@ -69,6 +69,8 @@ export const sendMessage = async (request, reply) => {
     const { conversationId, userId, text } = request.body;
     const prisma = request.server.prisma;
 
+    console.log(conversationId, userId, text)
+
     const missingField = ["conversationId", "userId", "text"].find(
       (field) => !request.body[field]
     );

@@ -14,6 +14,7 @@ import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
+import { FileService } from "../../../utils/fileService";
 
 export const deleteMessage = async (request, reply) => {
   try {
@@ -69,16 +70,23 @@ export const sendMessage = async (request, reply) => {
     const { conversationId, userId, text } = request.body;
     const prisma = request.server.prisma;
 
-    console.log(conversationId, userId, text)
-
     const missingField = ["conversationId", "userId", "text"].find(
       (field) => !request.body[field]
     );
-
     if (missingField) {
       return reply.status(400).send({
         success: false,
         message: `${missingField} is required!`,
+      });
+    }
+
+    const files = (request.files as any[]) || [];
+    const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
+
+    if ((!text || text.trim() === "") && files.length === 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "Either text or at least one file is required!",
       });
     }
 
@@ -106,7 +114,7 @@ export const sendMessage = async (request, reply) => {
       const [message, members] = await Promise.all([
         tx.message.create({
           data: {
-            text,
+            text: text && text.trim() !== "" ? text : null,
             userId: userIdInt,
             conversationId,
           },
@@ -119,6 +127,7 @@ export const sendMessage = async (request, reply) => {
                 avatar: true,
               },
             },
+            MessageFile: true,
           },
         }),
         tx.conversationMember.findMany({
@@ -136,7 +145,43 @@ export const sendMessage = async (request, reply) => {
         }),
       ]);
 
-      return { message, members };
+      // Save uploaded files if any
+      if (files.length > 0) {
+        try {
+          await Promise.all(
+            files.map((file) => {
+              const fileExtension = path.extname(file.originalname || "").replace(".", "");
+              return tx.messageFile.create({
+                data: {
+                  messageId: message.id,
+                  userId: userIdInt,
+                  fileUrl: file.filename,
+                  fileType: file.mimetype || null,
+                  fileSize: typeof file.size === "number" ? file.size : null,
+                  fileExtension: fileExtension || null,
+                },
+              });
+            })
+          );
+        } catch (e) {
+          // Cleanup local uploaded files if DB save fails
+          try { FileService.removeFiles(uploadedFilenames); } catch (_) {}
+          throw e;
+        }
+      }
+
+      // Re-fetch message with files to return complete payload
+      const messageWithFiles = await tx.message.findUnique({
+        where: { id: message.id },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatar: true },
+          },
+          MessageFile: true,
+        },
+      });
+
+      return { message: messageWithFiles, members };
     });
 
     const response = {
@@ -155,6 +200,14 @@ export const sendMessage = async (request, reply) => {
 
     return reply.status(201).send(response);
   } catch (error) {
+    // Cleanup uploaded files on any error
+    try {
+      const files = (request.files as any[]) || [];
+      const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
+      if (uploadedFilenames.length) {
+        FileService.removeFiles(uploadedFilenames);
+      }
+    } catch (_) {}
     request.log.error(error);
 
     if (
@@ -505,50 +558,24 @@ export const getMessages = async (request, reply) => {
   }
 };
 
-export const uploadMessageFiles = async (request, reply) => {
-  try {
-    const { conversationId, userId } = request.body;
-    const prisma = request.server.prisma;
 
-    if (!conversationId || !userId) {
-      return reply.status(400).send({
-        success: false,
-        message: "conversationId and userId are required!",
-      });
-    }
-    const userIdInt = parseInt(userId);
-    let files = request.files || (request.file ? [request.file] : []);
-    if (!files.length) {
-      return reply.status(400).send({ success: false, message: "No files uploaded!" });
-    }
-    // Allow only images for now, can be extended for other file types
-    const uploadedInfo = await Promise.all(files.map(async (file) => {
-      // Save record in DB
-      const message = await prisma.message.create({
-        data: {
-          conversationId,
-          userId: userIdInt,
-          text: null,
-          // You may want: fileName: file.originalname, mimeType: file.mimetype...
-        },
-      });
-      // The storage system (multer) saves file to uploads dir, build URL
-      const url = getImageUrl(`/uploads/${file.filename}`);
-      return {
-        id: message.id,
-        image: url,
-      };
-    }));
-    return reply.send({
-      success: true,
-      files: uploadedInfo,
-    });
-  } catch (error) {
-    request.log.error(error);
-    return reply.status(500).send({
-      success: false,
-      message: "Failed to upload files",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
+
+// model MessageFile {
+//   id String @id @default(cuid())
+
+//   //relations
+//   userId Int?
+//   user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+//   fileUrl       String
+//   fileType      String?
+//   fileSize      Int?
+//   fileExtension String?
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   @@map("message_files")
+// }
+
+

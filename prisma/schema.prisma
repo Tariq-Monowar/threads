@@ -92,7 +92,7 @@ model Message {
   deletedForUsers Int[] @default([])
 
   //relations
-  files String[] @default([])
+  MessageFile MessageFile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -104,8 +104,10 @@ model MessageFile {
   id String @id @default(cuid())
 
   //relations
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId    Int?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   fileUrl       String
   fileType      String?

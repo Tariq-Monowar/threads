@@ -123,7 +123,6 @@ import { uploadsDir } from "../../../../config/storage.config";
 //   }
 // };
 
-
 export const createConversation = async (request, reply) => {
   try {
     const { otherUserId, myId } = request.body;
@@ -229,6 +228,14 @@ export const createConversation = async (request, reply) => {
         (m) => m.userId !== myIdInt
       );
       if (otherMember?.userId) {
+
+        let data = {
+          ...filterForUser(newConversation, otherMember.userId),
+          messages: [],
+        };
+  
+        console.log(data);
+        
         request.server.io
           .to(otherMember.userId.toString())
           .emit("conversation_created", {
@@ -263,7 +270,15 @@ export const createConversation = async (request, reply) => {
     });
 
     const otherMember = conversation.members.find((m) => m.userId !== myIdInt);
+
     if (otherMember?.userId) {
+      let data = {
+        ...filterForUser(conversation, otherMember.userId),
+        messages: [],
+      };
+
+      console.log(data);
+
       request.server.io
         .to(otherMember.userId.toString())
         .emit("conversation_created", {
@@ -289,8 +304,6 @@ export const createConversation = async (request, reply) => {
       .send({ success: false, message: "Failed to create chat" });
   }
 };
-
-
 
 export const deleteConversationForMe = async (request, reply) => {
   try {

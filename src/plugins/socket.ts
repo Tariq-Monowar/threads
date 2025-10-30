@@ -63,10 +63,12 @@ export default fp(async (fastify) => {
   });
 
   fastify.decorate("io", io);
+  fastify.decorate("onlineUsers", onlineUsers);
 });
 
 declare module "fastify" {
   interface FastifyInstance {
     io: Server;
+    onlineUsers: Map<string, string>;
   }
 }

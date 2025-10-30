@@ -504,3 +504,51 @@ export const getMessages = async (request, reply) => {
     });
   }
 };
+
+export const uploadMessageFiles = async (request, reply) => {
+  try {
+    const { conversationId, userId } = request.body;
+    const prisma = request.server.prisma;
+
+    if (!conversationId || !userId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId and userId are required!",
+      });
+    }
+    const userIdInt = parseInt(userId);
+    let files = request.files || (request.file ? [request.file] : []);
+    if (!files.length) {
+      return reply.status(400).send({ success: false, message: "No files uploaded!" });
+    }
+    // Allow only images for now, can be extended for other file types
+    const uploadedInfo = await Promise.all(files.map(async (file) => {
+      // Save record in DB
+      const message = await prisma.message.create({
+        data: {
+          conversationId,
+          userId: userIdInt,
+          text: null,
+          // You may want: fileName: file.originalname, mimeType: file.mimetype...
+        },
+      });
+      // The storage system (multer) saves file to uploads dir, build URL
+      const url = getImageUrl(`/uploads/${file.filename}`);
+      return {
+        id: message.id,
+        image: url,
+      };
+    }));
+    return reply.send({
+      success: true,
+      files: uploadedInfo,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to upload files",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

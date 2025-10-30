@@ -112,7 +112,6 @@ export const getMyConversationsList = async (request, reply) => {
 
     const transformedConversations = await Promise.all(
       conversations.map(async (conv) => {
-        // Count unread messages excluding user's own messages
         const unreadCount = await prisma.message.count({
           where: {
             conversationId: conv.id,

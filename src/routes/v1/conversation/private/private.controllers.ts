@@ -156,6 +156,16 @@ export const createConversation = async (request, reply) => {
       },
     });
 
+    const filterForUser = (conversation, userIdToExclude: number) => {
+      if (!conversation) return null;
+      return {
+        ...conversation,
+        members: conversation.members.filter(
+          (member) => member.userId !== userIdToExclude
+        ),
+      };
+    };
+
     const filterMyInfo = (conversation) => {
       if (!conversation) return null;
       return {
@@ -171,6 +181,16 @@ export const createConversation = async (request, reply) => {
         where: { conversationId: activeConversation.id },
         take: 50,
         orderBy: { createdAt: "asc" },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+            },
+          },
+        },
       });
 
       return reply.send({
@@ -205,6 +225,21 @@ export const createConversation = async (request, reply) => {
         },
       });
 
+      const otherMember = newConversation.members.find(
+        (m) => m.userId !== myIdInt
+      );
+      if (otherMember?.userId) {
+        request.server.io
+          .to(otherMember.userId.toString())
+          .emit("conversation_created", {
+            success: true,
+            data: {
+              ...filterForUser(newConversation, otherMember.userId),
+              messages: [],
+            },
+          });
+      }
+
       return reply.send({
         success: true,
         data: {
@@ -226,6 +261,19 @@ export const createConversation = async (request, reply) => {
         members: { include: { user: true } },
       },
     });
+
+    const otherMember = conversation.members.find((m) => m.userId !== myIdInt);
+    if (otherMember?.userId) {
+      request.server.io
+        .to(otherMember.userId.toString())
+        .emit("conversation_created", {
+          success: true,
+          data: {
+            ...filterForUser(conversation, otherMember.userId),
+            messages: [],
+          },
+        });
+    }
 
     return reply.send({
       success: true,

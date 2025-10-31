@@ -45,11 +45,22 @@ export const deleteMessage = async (request, reply) => {
       });
     }
 
-    await prisma.message.delete({
-      where: {
-        id: messageId,
-      },
+    const files = await prisma.messageFile.findMany({
+      where: { messageId },
+      select: { fileUrl: true },
     });
+
+    await prisma.$transaction([
+      prisma.messageFile.deleteMany({ where: { messageId } }),
+      prisma.message.delete({ where: { id: messageId } }),
+    ]);
+
+    try {
+      const filenames = files.map((f) => f.fileUrl).filter(Boolean);
+      if (filenames.length) {
+        FileService.removeFiles(filenames);
+      }
+    } catch (_) {}
 
     return reply.send({
       success: true,
@@ -81,6 +92,7 @@ export const sendMessage = async (request, reply) => {
     }
 
     const files = (request.files as any[]) || [];
+
     const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
 
     if ((!text || text.trim() === "") && files.length === 0) {
@@ -332,27 +344,66 @@ export const deleteMessageForEveryone = async (request, reply) => {
       });
     }
 
-    if (message.isDeletedForEveryone) {
-      return reply.status(400).send({
-        success: false,
-        message: "Message already deleted for everyone",
-      });
-    }
-
-    await prisma.message.update({
-      where: {
-        id: messageId,
-      },
-      data: {
-        // isDeletedForEveryone: true,
-        // deletedForEveryoneAt: new Date(),
-        text: "Message is deleted",
-      },
+    const files = await prisma.messageFile.findMany({
+      where: { messageId },
+      select: { fileUrl: true },
     });
+
+    await prisma.$transaction([
+      prisma.messageFile.deleteMany({ where: { messageId } }),
+      prisma.message.update({
+        where: { id: messageId },
+        data: { text: "Message is deleted" },
+      }),
+    ]);
+
+    try {
+      const filenames = files.map((f) => f.fileUrl).filter(Boolean);
+      if (filenames.length) {
+        FileService.removeFiles(filenames);
+      }
+    } catch (_) {}
+
+    // Broadcast deletion to all conversation members
+    try {
+      const members = await prisma.conversationMember.findMany({
+        where: {
+          conversationId: message.conversationId,
+          isDeleted: false,
+          userId: {
+            not: myIdInt,
+          },
+        },
+        select: { userId: true },
+      });
+
+      const payload = {
+        success: true,
+        message: "Message deleted for everyone",
+        data: {
+          messageId,
+          conversationId: message.conversationId,
+        },
+      };
+
+      console.log("??????=============????", members);
+      console.log("??????????", payload);
+      members.forEach((member) => {
+        if (member.userId) {
+          request.server.io
+            .to(member.userId.toString())
+            .emit("message_deleted_for_everyone", payload);
+        }
+      });
+    } catch (_) {}
 
     return reply.send({
       success: true,
       message: "Message deleted for everyone",
+      data: {
+        messageId,
+        conversationId: message.conversationId,
+      },
     });
   } catch (error) {
     request.log.error(error);
@@ -557,21 +608,3 @@ export const getMessages = async (request, reply) => {
     });
   }
 };
-
-// model MessageFile {
-//   id String @id @default(cuid())
-
-//   //relations
-//   userId Int?
-//   user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-//   fileUrl       String
-//   fileType      String?
-//   fileSize      Int?
-//   fileExtension String?
-
-//   createdAt DateTime @default(now())
-//   updatedAt DateTime @updatedAt
-
-//   @@map("message_files")
-// }

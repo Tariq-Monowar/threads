@@ -6,6 +6,7 @@ import {
   deleteMessageForEveryone,
   getMessages,
   markMultipleMessagesAsRead,
+  updateMessage,
 } from "./messages.controllers";
 import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
@@ -17,6 +18,7 @@ const messageRoutes = (fastify: FastifyInstance) => {
   fastify.delete("/delete-for-me/:messageId", deleteMessageForMe);
   fastify.delete("/delete-for-everyone/:messageId", deleteMessageForEveryone);
   fastify.patch("/mark-as-read/:conversationId", markMultipleMessagesAsRead);
+  fastify.patch("/messages/:messageId", { preHandler: upload.array("files") }, updateMessage);
 };
 
 export default messageRoutes;

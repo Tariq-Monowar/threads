@@ -196,7 +196,6 @@ export const sendMessage = async (request, reply) => {
         })) || [],
     } as any;
 
-    // Remove fields not desired in response, if present
     if ("deletedForUsers" in transformedMessage) {
       delete (transformedMessage as any).deletedForUsers;
     }
@@ -420,6 +419,150 @@ export const deleteMessageForEveryone = async (request, reply) => {
   }
 };
 
+export const updateMessage = async (request, reply) => {
+  try {
+    const { messageId } = request.params;
+    const { myId, text } = request.body;
+    const prisma = request.server.prisma;
+
+    if (!messageId || !myId) {
+      return reply.status(400).send({
+        success: false,
+        message: "messageId and myId are required!",
+      });
+    }
+
+    const files = (request.files as any[]) || [];
+    const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
+
+    if ((!text || typeof text !== "string" || text.trim() === "") && files.length === 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "Provide text or at least one file to update",
+      });
+    }
+
+    const myIdInt = parseInt(myId);
+
+    const existing = await prisma.message.findFirst({
+      where: { id: messageId, userId: myIdInt },
+      select: { id: true, conversationId: true },
+    });
+
+    if (!existing) {
+      return reply.status(404).send({
+        success: false,
+        message: "Message not found or you don't have permission to update it",
+      });
+    }
+
+    let oldFiles: { fileUrl: string }[] = [];
+    if (files.length > 0) {
+      oldFiles = await prisma.messageFile.findMany({
+        where: { messageId },
+        select: { fileUrl: true },
+      });
+    }
+
+    const filesCreate = files.length
+      ? files.map((file) => ({
+          userId: myIdInt,
+          fileUrl: file.filename,
+          fileType: file.mimetype || null,
+          fileSize: typeof file.size === "number" ? file.size : null,
+          fileExtension: (path.extname(file.originalname || "").replace(".", "") || null),
+        }))
+      : [];
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (files.length > 0) {
+        await tx.messageFile.deleteMany({ where: { messageId } });
+      }
+
+      return tx.message.update({
+        where: { id: messageId },
+        data: {
+          ...(text && typeof text === "string" && text.trim() !== "" ? { text: text.trim() } : {}),
+          ...(filesCreate.length
+            ? {
+                MessageFile: {
+                  create: filesCreate,
+                },
+              }
+            : {}),
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true, avatar: true } },
+          MessageFile: true,
+        },
+      });
+    });
+
+    const transformed = {
+      ...updated,
+      user: updated.user
+        ? {
+            ...updated.user,
+            avatar: updated.user.avatar
+              ? FileService.avatarUrl(updated.user.avatar)
+              : null,
+          }
+        : updated.user,
+      MessageFile: (updated.MessageFile || []).map((f: any) => ({
+        ...f,
+        fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
+      })),
+    } as any;
+    if ("deletedForUsers" in transformed) delete (transformed as any).deletedForUsers;
+
+    const response = {
+      success: true,
+      message: "Message updated successfully",
+      data: transformed,
+    };
+
+    const members = await prisma.conversationMember.findMany({
+      where: {
+        conversationId: existing.conversationId,
+        isDeleted: false,
+        userId: { not: myIdInt },
+      },
+      select: { userId: true },
+    });
+    members.forEach((member) => {
+      if (member.userId) {
+        request.server.io
+          .to(member.userId.toString())
+          .emit("message_updated", response);
+      }
+    });
+
+    // Remove old files from disk after successful update
+    try {
+      if (files.length > 0 && oldFiles.length) {
+        FileService.removeFiles(oldFiles.map((f) => f.fileUrl).filter(Boolean));
+      }
+    } catch (_) {}
+
+    return reply.send(response);
+  } catch (error) {
+    // Rollback uploaded files from disk on error
+    try {
+      const files = (request.files as any[]) || [];
+      const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
+      if (uploadedFilenames.length) {
+        FileService.removeFiles(uploadedFilenames);
+      }
+    } catch (_) {}
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to update message",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 export const markMultipleMessagesAsRead = async (request, reply) => {
   try {
     const { conversationId } = request.params;
@@ -459,6 +602,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       });
     }
 
+    
     const [result, members] = await Promise.all([
       prisma.message.updateMany({
         where: {

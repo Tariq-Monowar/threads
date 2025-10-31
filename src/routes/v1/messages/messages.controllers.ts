@@ -364,7 +364,7 @@ export const deleteMessageForEveryone = async (request, reply) => {
       }
     } catch (_) {}
 
-    // Broadcast deletion to all conversation members
+
     try {
       const members = await prisma.conversationMember.findMany({
         where: {
@@ -386,8 +386,6 @@ export const deleteMessageForEveryone = async (request, reply) => {
         },
       };
 
-      console.log("??????=============????", members);
-      console.log("??????????", payload);
       members.forEach((member) => {
         if (member.userId) {
           request.server.io
@@ -434,7 +432,6 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       where: {
         conversationId,
         isRead: false,
-        isDeletedForEveryone: false,
         NOT: {
           userId: myIdInt,
         },
@@ -460,7 +457,6 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         where: {
           conversationId,
           isRead: false,
-          isDeletedForEveryone: false,
           NOT: {
             userId: myIdInt,
           },
@@ -525,78 +521,66 @@ export const getMessages = async (request, reply) => {
     const { myId, page = 1, limit = 10 } = request.query;
     const prisma = request.server.prisma;
 
+    // Validate inputs
     if (!conversationId || !myId) {
-      return reply.status(400).send({
-        success: false,
-        message: "conversationId and myId are required!",
-      });
+      return reply.status(400).send({ success: false, message: "conversationId and myId are required!" });
     }
 
-    const pageInt = Math.max(parseInt(page.toString()) || 1, 1);
-    const limitInt = Math.min(
-      Math.max(parseInt(limit.toString()) || 10, 1),
-      100
-    );
-    const offset = (pageInt - 1) * limitInt;
+    // Parse and clamp pagination
+    const currentPage = Math.max(parseInt(page.toString()) || 1, 1);
+    const perPage = Math.min(Math.max(parseInt(limit.toString()) || 10, 1), 100);
+    const offset = (currentPage - 1) * perPage;
 
     const myIdInt = parseInt(myId);
 
-    const conversationMember = await prisma.conversationMember.findFirst({
-      where: {
-        conversationId,
-        userId: myIdInt,
-        isDeleted: false,
-      },
+    // Ensure user is part of the conversation
+    const member = await prisma.conversationMember.findFirst({
+      where: { conversationId, userId: myIdInt, isDeleted: false },
       select: { id: true },
     });
-
-    if (!conversationMember) {
-      return reply.status(403).send({
-        success: false,
-        message: "You don't have access to this conversation",
-      });
+    if (!member) {
+      return reply.status(403).send({ success: false, message: "You don't have access to this conversation" });
     }
 
-    const messages = await prisma.message.findMany({
+    // Query messages (fetch one extra to determine hasNextPage)
+    const rows = await prisma.message.findMany({
       where: {
         conversationId,
-        isDeletedForEveryone: false,
-        deletedForMe: {
-          none: {
-            userId: myIdInt,
-          },
-        },
+        NOT: { deletedForUsers: { has: myIdInt } },
       },
       include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            avatar: true,
-          },
-        },
+        user: { select: { id: true, name: true, email: true, avatar: true } },
+        MessageFile: true,
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
       skip: offset,
-      take: limitInt + 1,
+      take: perPage + 1,
     });
 
-    const hasMore = messages.length > limitInt;
-    const actualMessages = hasMore ? messages.slice(0, limitInt) : messages;
-    const hasNextPage = hasMore;
-    const hasPrevPage = pageInt > 1;
+    const hasMore = rows.length > perPage;
+    const pageRows = hasMore ? rows.slice(0, perPage) : rows;
+
+    // Map files to absolute URLs and hide internal fields
+    const data = pageRows.map((m: any) => ({
+      ...(() => {
+        const clone = { ...m } as any;
+        if ("deletedForUsers" in clone) delete clone.deletedForUsers;
+        return clone;
+      })(),
+      MessageFile: (m.MessageFile || []).map((f: any) => ({
+        ...f,
+        fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
+      })),
+    }));
 
     return reply.send({
       success: true,
-      data: actualMessages,
+      data,
       pagination: {
-        currentPage: pageInt,
-        itemsPerPage: limitInt,
-        hasNextPage,
-        hasPrevPage,
+        currentPage,
+        itemsPerPage: perPage,
+        hasNextPage: hasMore,
+        hasPrevPage: currentPage > 1,
       },
     });
   } catch (error) {

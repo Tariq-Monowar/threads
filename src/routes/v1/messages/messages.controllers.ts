@@ -103,6 +103,7 @@ export const sendMessage = async (request, reply) => {
             },
           },
         },
+        select: { id: true },
       });
 
       if (!conversation) {
@@ -111,12 +112,30 @@ export const sendMessage = async (request, reply) => {
         );
       }
 
+      const filesCreate = files.length
+        ? files.map((file) => ({
+            userId: userIdInt,
+            fileUrl: file.filename,
+            fileType: file.mimetype || null,
+            fileSize: typeof file.size === "number" ? file.size : null,
+            fileExtension:
+              path.extname(file.originalname || "").replace(".", "") || null,
+          }))
+        : [];
+
       const [message, members] = await Promise.all([
         tx.message.create({
           data: {
             text: text && text.trim() !== "" ? text : null,
             userId: userIdInt,
             conversationId,
+            ...(filesCreate.length
+              ? {
+                  MessageFile: {
+                    create: filesCreate,
+                  },
+                }
+              : {}),
           },
           include: {
             user: {
@@ -145,62 +164,41 @@ export const sendMessage = async (request, reply) => {
         }),
       ]);
 
-      // Save uploaded files if any
-      if (files.length > 0) {
-        try {
-          await Promise.all(
-            files.map((file) => {
-              const fileExtension = path.extname(file.originalname || "").replace(".", "");
-              return tx.messageFile.create({
-                data: {
-                  messageId: message.id,
-                  userId: userIdInt,
-                  fileUrl: file.filename,
-                  fileType: file.mimetype || null,
-                  fileSize: typeof file.size === "number" ? file.size : null,
-                  fileExtension: fileExtension || null,
-                },
-              });
-            })
-          );
-        } catch (e) {
-          // Cleanup local uploaded files if DB save fails
-          try { FileService.removeFiles(uploadedFilenames); } catch (_) {}
-          throw e;
-        }
-      }
-
-      // Re-fetch message with files to return complete payload
-      const messageWithFiles = await tx.message.findUnique({
-        where: { id: message.id },
-        include: {
-          user: {
-            select: { id: true, name: true, email: true, avatar: true },
-          },
-          MessageFile: true,
-        },
-      });
-
-      return { message: messageWithFiles, members };
+      return { message, members };
     });
+
+    const transformedMessage = {
+      ...transactionResult.message,
+      MessageFile:
+        (transactionResult.message as any)?.MessageFile?.map((f: any) => ({
+          ...f,
+          fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
+        })) || [],
+    } as any;
+
+    // Remove fields not desired in response, if present
+    if ("deletedForUsers" in transformedMessage) {
+      delete (transformedMessage as any).deletedForUsers;
+    }
 
     const response = {
       success: true,
       message: "Message sent successfully",
-      data: transactionResult.message,
+      data: transformedMessage,
     };
 
     transactionResult.members
       .filter((member) => member.userId !== userIdInt)
       .forEach((member) => {
         if (member.userId) {
-          request.server.io.to(member.userId.toString()).emit("new_message", response);
+          request.server.io
+            .to(member.userId.toString())
+            .emit("new_message", response);
         }
       });
 
     return reply.status(201).send(response);
   } catch (error) {
-    // Cleanup uploaded files on any error
     try {
       const files = (request.files as any[]) || [];
       const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
@@ -436,14 +434,16 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       conversationId,
       markedBy: myIdInt,
       markedCount: result.count,
-      messageIds: unreadMessages.map(m => m.id),
+      messageIds: unreadMessages.map((m) => m.id),
     };
 
     console.log("readStatusData", readStatusData);
 
     members.forEach((member) => {
       if (member.userId) {
-        request.server.io.to(member.userId.toString()).emit("messages_marked_read", readStatusData);
+        request.server.io
+          .to(member.userId.toString())
+          .emit("messages_marked_read", readStatusData);
       }
     });
 
@@ -558,8 +558,6 @@ export const getMessages = async (request, reply) => {
   }
 };
 
-
-
 // model MessageFile {
 //   id String @id @default(cuid())
 
@@ -577,5 +575,3 @@ export const getMessages = async (request, reply) => {
 
 //   @@map("message_files")
 // }
-
-

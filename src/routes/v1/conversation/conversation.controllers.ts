@@ -1,4 +1,5 @@
 import { getImageUrl } from "../../../utils/baseurl";
+import { FileService } from "../../../utils/fileService";
 
 export const getMyConversationsList = async (request, reply) => {
   try {
@@ -51,20 +52,11 @@ export const getMyConversationsList = async (request, reply) => {
         },
         messages: {
           where: {
-            AND: [
-              {
-                NOT: {
-                  deletedForMe: {
-                    some: {
-                      userId: parseInt(myId),
-                    },
-                  },
-                },
+            NOT: {
+              deletedForUsers: {
+                has: parseInt(myId),
               },
-              {
-                isDeletedForEveryone: false,
-              },
-            ],
+            },
           },
           orderBy: { createdAt: "desc" },
           take: messageLimit,
@@ -77,6 +69,7 @@ export const getMyConversationsList = async (request, reply) => {
                 avatar: true,
               },
             },
+            MessageFile: true,
           },
         },
       },
@@ -85,9 +78,11 @@ export const getMyConversationsList = async (request, reply) => {
 
     const formatUser = (user) =>
       user
-        ? { ...user, avatar: user.avatar ? getImageUrl(user.avatar) : null }
+        ? {
+            ...user,
+            avatar: user.avatar ? FileService.avatarUrl(user.avatar) : null,
+          }
         : null;
-
 
     const processMembers = (members, isGroup) => {
       const formatted = members.map((m) => ({
@@ -115,35 +110,28 @@ export const getMyConversationsList = async (request, reply) => {
         const unreadCount = await prisma.message.count({
           where: {
             conversationId: conv.id,
-            isRead: false,
-            isDeletedForEveryone: false,
-            userId: {
-              not: parseInt(myId),
-            },
-            deletedForMe: {
-              none: {
-                userId: parseInt(myId),
-              },
-            },
+            userId: { not: parseInt(myId) },
+            NOT: { deletedForUsers: { has: parseInt(myId) } },
           },
         });
 
         return {
           ...conv,
           members: processMembers(conv.members, conv.isGroup),
-          messages: conv.messages.map((msg) => ({
+          messages: conv.messages.map((msg: any) => ({
             id: msg.id,
             text: msg.text,
             userId: msg.userId,
             conversationId: msg.conversationId,
-            isDeletedForEveryone: msg.isDeletedForEveryone,
-            deletedForEveryoneAt: msg.deletedForEveryoneAt,
-            isRead: msg.isRead,
             createdAt: msg.createdAt,
             updatedAt: msg.updatedAt,
             user: formatUser(msg.user),
+            MessageFile: (msg.MessageFile || []).map((f) => ({
+              ...f,
+              fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
+            })),
           })),
-          avatar: conv.avatar ? getImageUrl(conv.avatar) : null,
+          avatar: conv.avatar ? FileService.avatarUrl(conv.avatar) : null,
           unreadCount,
         };
       })
@@ -172,3 +160,7 @@ export const getMyConversationsList = async (request, reply) => {
       .send({ success: false, message: "Failed to get conversations" });
   }
 };
+
+//convercatio
+//filtiring bad jabe without message
+// file

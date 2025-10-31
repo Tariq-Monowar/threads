@@ -9,6 +9,7 @@ import {
 
 import { generateJwtToken } from "../../../../utils/jwt.utils";
 import { getImageUrl } from "../../../../utils/baseurl";
+import { FileService } from "../../../../utils/fileService";
 import path from "path";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
@@ -176,27 +177,52 @@ export const createConversation = async (request, reply) => {
     };
 
     if (activeConversation) {
-      const messages = await prisma.message.findMany({
-        where: { conversationId: activeConversation.id },
+      const messagesRaw = await prisma.message.findMany({
+        where: {
+          conversationId: activeConversation.id,
+          NOT: { deletedForUsers: { has: myIdInt } },
+        },
         take: 50,
         orderBy: { createdAt: "asc" },
         include: {
           user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatar: true,
-            },
+            select: { id: true, name: true, email: true, avatar: true },
           },
+          MessageFile: true,
         },
       });
+
+      const transformedMessages = messagesRaw.map((m: any) => ({
+        ...(() => {
+          const clone = { ...m } as any;
+          if ("deletedForUsers" in clone) delete clone.deletedForUsers;
+          return clone;
+        })(),
+        MessageFile: (m.MessageFile || []).map((f: any) => ({
+          ...f,
+          fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
+        })),
+      }));
+
+      const filtered = filterMyInfo(activeConversation);
+      const membersWithAvatar = filtered.members.map((mem: any) => ({
+        ...mem,
+        user: mem.user
+          ? {
+              ...mem.user,
+              avatar: mem.user.avatar
+                ? FileService.avatarUrl(mem.user.avatar)
+                : null,
+            }
+          : null,
+      }));
 
       return reply.send({
         success: true,
         data: {
-          ...filterMyInfo(activeConversation),
-          messages,
+          ...filtered,
+          members: membersWithAvatar,
+          messages: transformedMessages,
         },
       });
     }
@@ -247,14 +273,30 @@ export const createConversation = async (request, reply) => {
           });
       }
 
-      return reply.send({
-        success: true,
-        data: {
-          ...filterMyInfo(newConversation),
-          messages: [],
-        },
-        message: "New conversation created (previous conversation was deleted)",
-      });
+      {
+        const filtered = filterMyInfo(newConversation);
+        const membersWithAvatar = filtered.members.map((mem: any) => ({
+          ...mem,
+          user: mem.user
+            ? {
+                ...mem.user,
+                avatar: mem.user.avatar
+                  ? FileService.avatarUrl(mem.user.avatar)
+                  : null,
+              }
+            : null,
+        }));
+
+        return reply.send({
+          success: true,
+          data: {
+            ...filtered,
+            members: membersWithAvatar,
+            messages: [],
+          },
+          message: "New conversation created (previous conversation was deleted)",
+        });
+      }
     }
 
     const conversation = await prisma.conversation.create({
@@ -290,13 +332,29 @@ export const createConversation = async (request, reply) => {
         });
     }
 
-    return reply.send({
-      success: true,
-      data: {
-        ...filterMyInfo(conversation),
-        messages: [],
-      },
-    });
+    {
+      const filtered = filterMyInfo(conversation);
+      const membersWithAvatar = filtered.members.map((mem: any) => ({
+        ...mem,
+        user: mem.user
+          ? {
+              ...mem.user,
+              avatar: mem.user.avatar
+                ? FileService.avatarUrl(mem.user.avatar)
+                : null,
+            }
+          : null,
+      }));
+
+      return reply.send({
+        success: true,
+        data: {
+          ...filtered,
+          members: membersWithAvatar,
+          messages: [],
+        },
+      });
+    }
   } catch (error) {
     console.error("Error creating conversation:", error);
     return reply

@@ -181,6 +181,14 @@ export const sendMessage = async (request, reply) => {
 
     const transformedMessage = {
       ...transactionResult.message,
+      user: transactionResult.message?.user
+        ? {
+            ...transactionResult.message.user,
+            avatar: transactionResult.message.user.avatar
+              ? FileService.avatarUrl(transactionResult.message.user.avatar)
+              : null,
+          }
+        : transactionResult.message?.user,
       MessageFile:
         (transactionResult.message as any)?.MessageFile?.map((f: any) => ({
           ...f,
@@ -253,9 +261,8 @@ export const deleteMessageForMe = async (request, reply) => {
     const myIdInt = parseInt(myId);
 
     const message = await prisma.message.findFirst({
-      where: {
-        id: messageId,
-      },
+      where: { id: messageId },
+      select: { conversationId: true, deletedForUsers: true },
     });
 
     if (!message) {
@@ -271,6 +278,7 @@ export const deleteMessageForMe = async (request, reply) => {
         userId: myIdInt,
         isDeleted: false,
       },
+      select: { id: true },
     });
 
     if (!conversationMember) {
@@ -280,30 +288,30 @@ export const deleteMessageForMe = async (request, reply) => {
       });
     }
 
-    const existingDeletion = await prisma.messageDeletion.findFirst({
-      where: {
-        messageId,
-        userId: myIdInt,
-      },
-    });
-
-    if (existingDeletion) {
+    if (
+      Array.isArray(message.deletedForUsers) &&
+      message.deletedForUsers.includes(myIdInt)
+    ) {
       return reply.status(400).send({
         success: false,
         message: "Message already deleted for you",
       });
     }
 
-    await prisma.messageDeletion.create({
+    await prisma.message.update({
+      where: { id: messageId },
       data: {
-        messageId,
-        userId: myIdInt,
+        deletedForUsers: { push: myIdInt },
       },
     });
 
     return reply.send({
       success: true,
       message: "Message deleted for you",
+      data: {
+        messageId,
+        conversationId: message.conversationId,
+      },
     });
   } catch (error) {
     request.log.error(error);
@@ -363,7 +371,6 @@ export const deleteMessageForEveryone = async (request, reply) => {
         FileService.removeFiles(filenames);
       }
     } catch (_) {}
-
 
     try {
       const members = await prisma.conversationMember.findMany({
@@ -521,28 +528,39 @@ export const getMessages = async (request, reply) => {
     const { myId, page = 1, limit = 10 } = request.query;
     const prisma = request.server.prisma;
 
-    // Validate inputs
-    if (!conversationId || !myId) {
-      return reply.status(400).send({ success: false, message: "conversationId and myId are required!" });
+    if (!conversationId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId is required!",
+      });
+    }
+    if (!myId) {
+      return reply.status(400).send({
+        success: false,
+        message: "myId is required!",
+      });
     }
 
-    // Parse and clamp pagination
     const currentPage = Math.max(parseInt(page.toString()) || 1, 1);
-    const perPage = Math.min(Math.max(parseInt(limit.toString()) || 10, 1), 100);
+    const perPage = Math.min(
+      Math.max(parseInt(limit.toString()) || 10, 1),
+      100
+    );
     const offset = (currentPage - 1) * perPage;
 
     const myIdInt = parseInt(myId);
 
-    // Ensure user is part of the conversation
     const member = await prisma.conversationMember.findFirst({
       where: { conversationId, userId: myIdInt, isDeleted: false },
       select: { id: true },
     });
     if (!member) {
-      return reply.status(403).send({ success: false, message: "You don't have access to this conversation" });
+      return reply.status(403).send({
+        success: false,
+        message: "You don't have access to this conversation",
+      });
     }
 
-    // Query messages (fetch one extra to determine hasNextPage)
     const rows = await prisma.message.findMany({
       where: {
         conversationId,
@@ -560,13 +578,18 @@ export const getMessages = async (request, reply) => {
     const hasMore = rows.length > perPage;
     const pageRows = hasMore ? rows.slice(0, perPage) : rows;
 
-    // Map files to absolute URLs and hide internal fields
     const data = pageRows.map((m: any) => ({
       ...(() => {
         const clone = { ...m } as any;
         if ("deletedForUsers" in clone) delete clone.deletedForUsers;
         return clone;
       })(),
+      user: m.user
+        ? {
+            ...m.user,
+            avatar: m.user.avatar ? FileService.avatarUrl(m.user.avatar) : null,
+          }
+        : m.user,
       MessageFile: (m.MessageFile || []).map((f: any) => ({
         ...f,
         fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,

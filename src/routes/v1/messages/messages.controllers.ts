@@ -81,7 +81,7 @@ export const sendMessage = async (request, reply) => {
     const { conversationId, userId, text } = request.body;
     const prisma = request.server.prisma;
 
-    const missingField = ["conversationId", "userId", "text"].find(
+    const missingField = ["conversationId", "userId"].find(
       (field) => !request.body[field]
     );
     if (missingField) {
@@ -602,7 +602,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       });
     }
 
-    
+
     const [result, members] = await Promise.all([
       prisma.message.updateMany({
         where: {

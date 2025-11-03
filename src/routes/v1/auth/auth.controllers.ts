@@ -326,7 +326,6 @@ export const searchUsers = async (request, reply) => {
 };
 
 
-
 export const syncUsers = async (request, reply) => {
   try {
     const prisma = request.server.prisma;
@@ -466,6 +465,125 @@ export const syncUsers = async (request, reply) => {
     return reply.status(500).send({
       success: false,
       message: "Sync failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+export const setFcmToken = async (request, reply) => {
+  try {
+    if (!request.body) {
+      return reply.status(400).send({
+        success: false,
+        message: "Request body is required",
+      });
+    }
+
+    const { fcmToken } = request.body;
+    const { myId } = request.params;
+
+    if(!fcmToken){
+      return reply.status(400).send({
+        success: false,
+        message: "fcmToken is require",
+      });
+    }
+
+    if(!myId){
+      return reply.status(400).send({
+        success: false,
+        message: "myId is require in params!",
+      });
+    }
+
+    const currentUserId = Number(myId);
+
+    if (isNaN(currentUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID — must be a number",
+      });
+    }
+
+    const prisma = request.server.prisma;
+
+    const user = await prisma.user.findUnique({
+      where: { id: currentUserId },
+    });
+
+    if (!user) {
+      return reply.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+    await prisma.user.update({
+      where: { id: currentUserId },
+      data: { fcmToken: [...user.fcmToken, fcmToken] },
+    });
+
+    return reply.status(200).send({
+      success: true,
+      message: "FCM token set successfully",
+      data: {
+        fcmToken: [...user.fcmToken, fcmToken],
+      },
+    });
+
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to set FCM token",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+  
+export const removeFcmToken = async (request, reply) => {
+  try {
+    if (!request.body) {
+      return reply.status(400).send({
+        success: false,
+        message: "Request body is required",
+      });
+    }
+
+    const { fcmToken } = request.body;
+    const { myId } = request.params;
+    const currentUserId = Number(myId);
+    if (isNaN(currentUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID — must be a number",
+      });
+    }
+    const prisma = request.server.prisma;
+    const user = await prisma.user.findUnique({
+      where: { id: currentUserId },
+    });
+    if (!user) {
+      return reply.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+    await prisma.user.update({
+      where: { id: currentUserId },
+      data: { fcmToken: user.fcmToken.filter((token) => token !== fcmToken) },
+    });
+    return reply.status(200).send({
+      success: true,
+      message: "FCM token removed successfully",
+      data: {
+        fcmToken: user.fcmToken.filter((token) => token !== fcmToken),
+      },
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to remove FCM token",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

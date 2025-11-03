@@ -540,6 +540,7 @@ export const setFcmToken = async (request, reply) => {
   }
 };
   
+
 export const removeFcmToken = async (request, reply) => {
   try {
     if (!request.body) {

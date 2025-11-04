@@ -168,6 +168,12 @@ export const sendMessage = async (request, reply) => {
           },
           select: {
             userId: true,
+            user: {
+              select: {
+                id: true,
+                fcmToken: true,
+              },
+            },
           },
         }),
         tx.conversation.update({
@@ -213,6 +219,28 @@ export const sendMessage = async (request, reply) => {
           request.server.io
             .to(member.userId.toString())
             .emit("new_message", response);
+        }
+        // push notification
+        const tokens = member.user?.fcmToken || [];
+        if (Array.isArray(tokens) && tokens.length) {
+          console.log("tokens", tokens);
+
+          const pushData = {
+            type: "new_message",
+            success: "true",
+            message: "Message sent successfully",
+            data: JSON.stringify(transformedMessage),
+          } as any;
+         
+          console.log("pushData", pushData);
+
+          Promise.all(
+            tokens
+              .filter(Boolean)
+              .map((token: string) =>
+                request.server.sendDataPush(token, pushData)
+              )
+          ).catch((err) => request.log.error({ err }, "push send failed"));
         }
       });
 
@@ -435,7 +463,10 @@ export const updateMessage = async (request, reply) => {
     const files = (request.files as any[]) || [];
     const uploadedFilenames = files.map((f) => f.filename).filter(Boolean);
 
-    if ((!text || typeof text !== "string" || text.trim() === "") && files.length === 0) {
+    if (
+      (!text || typeof text !== "string" || text.trim() === "") &&
+      files.length === 0
+    ) {
       return reply.status(400).send({
         success: false,
         message: "Provide text or at least one file to update",
@@ -470,7 +501,8 @@ export const updateMessage = async (request, reply) => {
           fileUrl: file.filename,
           fileType: file.mimetype || null,
           fileSize: typeof file.size === "number" ? file.size : null,
-          fileExtension: (path.extname(file.originalname || "").replace(".", "") || null),
+          fileExtension:
+            path.extname(file.originalname || "").replace(".", "") || null,
         }))
       : [];
 
@@ -482,7 +514,9 @@ export const updateMessage = async (request, reply) => {
       return tx.message.update({
         where: { id: messageId },
         data: {
-          ...(text && typeof text === "string" && text.trim() !== "" ? { text: text.trim() } : {}),
+          ...(text && typeof text === "string" && text.trim() !== ""
+            ? { text: text.trim() }
+            : {}),
           ...(filesCreate.length
             ? {
                 MessageFile: {
@@ -513,7 +547,8 @@ export const updateMessage = async (request, reply) => {
         fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
       })),
     } as any;
-    if ("deletedForUsers" in transformed) delete (transformed as any).deletedForUsers;
+    if ("deletedForUsers" in transformed)
+      delete (transformed as any).deletedForUsers;
 
     const response = {
       success: true,
@@ -601,7 +636,6 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         },
       });
     }
-
 
     const [result, members] = await Promise.all([
       prisma.message.updateMany({

@@ -2,38 +2,43 @@ import fp from "fastify-plugin"
 import * as admin from "firebase-admin"
 
 function initFirebase() {
-  if (admin.apps.length) return
-
+  if (admin.apps.length) return true
   const sa = process.env.FIREBASE_SERVICE_ACCOUNT
-  if (!sa) {
-    throw new Error("Set FIREBASE_SERVICE_ACCOUNT to your service account JSON string")
+  if (!sa) return false
+  try {
+    const creds = JSON.parse(sa)
+    admin.initializeApp({
+      credential: admin.credential.cert(creds as admin.ServiceAccount),
+    })
+    return true
+  } catch {
+    return false
   }
-
-  const creds = JSON.parse(sa)
-  admin.initializeApp({
-    credential: admin.credential.cert(creds as admin.ServiceAccount),
-  })
 }
 
 export default fp(async (fastify) => {
-  try {
-    initFirebase()
-
-    fastify.decorate(
-      "sendDataPush",
-      async (token: string, data: any) => {
-        return await admin.messaging().send({ token, data })
-      }
-    )
-
+  const initialized = initFirebase()
+  if (initialized) {
     fastify.log.info("Push notifications ready")
-  } catch (err) {
-    fastify.log.error({ err }, "Push notifications init failed")
+  } else {
+    fastify.log.warn(
+      "Push notifications not configured: set FIREBASE_SERVICE_ACCOUNT JSON"
+    )
   }
+
+  fastify.decorate(
+    "sendDataPush",
+    async (token: string, data: Record<string, string>) => {
+      if (!admin.apps.length) {
+        throw new Error("Push notifications not configured")
+      }
+      return await admin.messaging().send({ token, data })
+    }
+  )
 })
 
 declare module "fastify" {
   interface FastifyInstance {
-    sendDataPush: (token: string, data: any) => Promise<string>
+    sendDataPush: (token: string, data: Record<string, string>) => Promise<string>
   }
 }

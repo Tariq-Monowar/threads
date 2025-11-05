@@ -6,7 +6,7 @@ import messages from "./messages/messages.routes";
 
 import privateRoutes from "./conversation/private/private.routes";
 import grupRoutes from "./conversation/group/group.routes";
-import notifications from "./notifications/notifications.routes";
+
 
 async function routesV1(fastify: FastifyInstance) {
   const moduleRoutes = [
@@ -15,7 +15,7 @@ async function routesV1(fastify: FastifyInstance) {
     { path: "/messages", route: messages },
     { path: "/conversation/grups", route: grupRoutes },
     { path: "/conversation/private", route: privateRoutes },
-    { path: "/notifications", route: notifications },
+
   ];
 
   moduleRoutes.forEach(({ path, route }) => {

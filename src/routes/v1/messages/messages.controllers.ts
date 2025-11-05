@@ -212,37 +212,41 @@ export const sendMessage = async (request, reply) => {
       data: transformedMessage,
     };
 
-    transactionResult.members
-      .filter((member) => member.userId !== userIdInt)
-      .forEach((member) => {
-        if (member.userId) {
-          request.server.io
-            .to(member.userId.toString())
-            .emit("new_message", response);
-        }
-        // push notification
-        const tokens = member.user?.fcmToken || [];
-        if (Array.isArray(tokens) && tokens.length) {
-          console.log("tokens", tokens);
+    // Send socket events and push notifications to other members
+    for (const member of transactionResult.members) {
+      // console.log("================================================", member);
+      if (member.userId === userIdInt) {
+        continue
+      }
 
-          const pushData = {
-            type: "new_message",
-            success: "true",
-            message: "Message sent successfully",
-            data: JSON.stringify(transformedMessage),
-          } as any;
-         
-          console.log("pushData", pushData);
+      // Send socket event
+      if (member.userId) {
+        request.server.io
+          .to(member.userId.toString())
+          .emit("new_message", response)
+      }
 
-          Promise.all(
-            tokens
-              .filter(Boolean)
-              .map((token: string) =>
-                request.server.sendDataPush(token, pushData)
-              )
-          ).catch((err) => request.log.error({ err }, "push send failed"));
+      // Send push notifications
+      const fcmTokens = member.user?.fcmToken || []
+      // console.log("================================================", fcmTokens);
+      if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
+        const pushData = {
+          type: "new_message",
+          success: "true",
+          message: "Message sent successfully",
+          data: JSON.stringify(transformedMessage),
         }
-      });
+
+        // Send push to all valid tokens
+        const validTokens = fcmTokens.filter((token): token is string => Boolean(token))
+        for (const token of validTokens) {
+          const result = await request.server.sendDataPush(token, pushData)
+          if (!result.success) {
+            request.log.warn({ token, error: result.error }, "Push notification failed")
+          }
+        }
+      }
+    }
 
     return reply.status(201).send(response);
   } catch (error) {

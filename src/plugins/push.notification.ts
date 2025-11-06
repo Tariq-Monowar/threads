@@ -46,11 +46,13 @@ export default fp(async (fastify) => {
         return { success: false, error: "Push notifications not configured" }
       }
 
+      console.log("================================================", data);
+
       try {
         const messageId = await admin.messaging().send({
           token,
           data: {
-            body: data.message || "You have a new message!",
+            body: data as any || "You have a new message!",
           },
         })
         return { success: true, messageId }

@@ -187,6 +187,7 @@ export const sendMessage = async (request, reply) => {
 
     const transformedMessage = {
       ...transactionResult.message,
+      userId: userIdInt,
       user: transactionResult.message?.user
         ? {
             ...transactionResult.message.user,

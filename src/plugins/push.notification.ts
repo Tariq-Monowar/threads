@@ -49,11 +49,9 @@ export default fp(async (fastify) => {
       try {
         const messageId = await admin.messaging().send({
           token,
-          notification: {
-            title: data.title || "New Message",
+          data: {
             body: data.message || "You have a new message!",
           },
-          data,
         })
         return { success: true, messageId }
       } catch (error: any) {

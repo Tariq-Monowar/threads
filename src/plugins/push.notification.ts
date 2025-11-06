@@ -52,7 +52,7 @@ export default fp(async (fastify) => {
         const messageId = await admin.messaging().send({
           token,
           data: {
-            body: data as any || "You have a new message!",
+            data: JSON.stringify(data) || "You have a new message!",
           },
         })
         return { success: true, messageId }

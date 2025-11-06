@@ -234,7 +234,7 @@ export const sendMessage = async (request, reply) => {
           type: "new_message",
           success: "true",
           message: "Message sent successfully",
-          data: JSON.stringify(transformedMessage),
+          data: transformedMessage,
         }
 
         // Send push to all valid tokens

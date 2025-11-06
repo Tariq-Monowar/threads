@@ -192,12 +192,24 @@ export const createConversation = async (request, reply) => {
         },
       });
 
+      const memberUserIds = (activeConversation.members || [])
+        .map((mem) => mem.userId)
+        .filter(Boolean) as number[];
+
       const transformedMessages = messagesRaw.map((m: any) => ({
         ...(() => {
           const clone = { ...m } as any;
           if ("deletedForUsers" in clone) delete clone.deletedForUsers;
           return clone;
         })(),
+        senderId: m.userId,
+        receiverId: memberUserIds.filter((uid) => uid !== m.userId),
+        user: m.user
+          ? {
+              ...m.user,
+              avatar: m.user.avatar ? FileService.avatarUrl(m.user.avatar) : null,
+            }
+          : m.user,
         MessageFile: (m.MessageFile || []).map((f: any) => ({
           ...f,
           fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,

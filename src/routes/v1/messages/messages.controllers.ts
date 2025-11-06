@@ -187,7 +187,10 @@ export const sendMessage = async (request, reply) => {
 
     const transformedMessage = {
       ...transactionResult.message,
-      userId: userIdInt,
+      senderId: userIdInt,
+      receiverId: transactionResult.members
+        .filter((member) => member.userId !== userIdInt)
+        .map((member) => member.userId),
       user: transactionResult.message?.user
         ? {
             ...transactionResult.message.user,
@@ -217,18 +220,18 @@ export const sendMessage = async (request, reply) => {
     for (const member of transactionResult.members) {
       // console.log("================================================", member);
       if (member.userId === userIdInt) {
-        continue
+        continue;
       }
 
       // Send socket event
       if (member.userId) {
         request.server.io
           .to(member.userId.toString())
-          .emit("new_message", response)
+          .emit("new_message", response);
       }
 
       // Send push notifications
-      const fcmTokens = member.user?.fcmToken || []
+      const fcmTokens = member.user?.fcmToken || [];
       // console.log("================================================", fcmTokens);
       if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
         const pushData = {
@@ -236,14 +239,19 @@ export const sendMessage = async (request, reply) => {
           success: "true",
           message: "Message sent successfully",
           data: transformedMessage,
-        }
+        };
 
         // Send push to all valid tokens
-        const validTokens = fcmTokens.filter((token): token is string => Boolean(token))
+        const validTokens = fcmTokens.filter((token): token is string =>
+          Boolean(token)
+        );
         for (const token of validTokens) {
-          const result = await request.server.sendDataPush(token, pushData)
+          const result = await request.server.sendDataPush(token, pushData);
           if (!result.success) {
-            request.log.warn({ token, error: result.error }, "Push notification failed")
+            request.log.warn(
+              { token, error: result.error },
+              "Push notification failed"
+            );
           }
         }
       }

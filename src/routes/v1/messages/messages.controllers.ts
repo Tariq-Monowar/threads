@@ -752,6 +752,15 @@ export const getMessages = async (request, reply) => {
       });
     }
 
+    // Fetch all participant userIds for receiverId computation
+    const participants = await prisma.conversationMember.findMany({
+      where: { conversationId, isDeleted: false },
+      select: { userId: true },
+    });
+    const participantIds = participants
+      .map((p) => p.userId)
+      .filter((id): id is number => typeof id === "number");
+
     const rows = await prisma.message.findMany({
       where: {
         conversationId,
@@ -775,6 +784,9 @@ export const getMessages = async (request, reply) => {
         if ("deletedForUsers" in clone) delete clone.deletedForUsers;
         return clone;
       })(),
+      // Align with sendMessage shape
+      senderId: typeof m.userId === "number" ? m.userId : null,
+      receiverId: participantIds.filter((id) => id !== m.userId),
       user: m.user
         ? {
             ...m.user,

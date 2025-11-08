@@ -5,7 +5,7 @@ import conversation from "./conversation/conversation.routes";
 import messages from "./messages/messages.routes";
 
 import privateRoutes from "./conversation/private/private.routes";
-import grupRoutes from "./conversation/group/group.routes";
+import groupRoutes from "./conversation/group/group.routes";
 
 
 async function routesV1(fastify: FastifyInstance) {
@@ -13,7 +13,7 @@ async function routesV1(fastify: FastifyInstance) {
     { path: "/auth", route: auth },
     { path: "/conversation", route: conversation },
     { path: "/messages", route: messages },
-    { path: "/conversation/grups", route: grupRoutes },
+    { path: "/conversation/groups", route: groupRoutes },
     { path: "/conversation/private", route: privateRoutes },
 
   ];

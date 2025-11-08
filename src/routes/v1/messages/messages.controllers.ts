@@ -201,48 +201,63 @@ export const sendMessage = async (request, reply) => {
       data: transformedMessage,
     };
 
-    // Send socket events and push notifications to other members
-    for (const member of transactionResult.members) {
-      // console.log("================================================", member);
-      if (member.userId === userIdInt) {
-        continue;
-      }
+   
 
-      // Send socket event
-      if (member.userId) {
-        request.server.io
-          .to(member.userId.toString())
-          .emit("new_message", response);
-      }
-
-      // Send push notifications
-      const fcmTokens = member.user?.fcmToken || [];
-      // console.log("================================================", fcmTokens);
-      if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
+    setImmediate(async () => {
+      try {
         const pushData = {
           type: "new_message",
           success: "true",
           message: "Message sent successfully",
-          data: transformedMessage,
+          data: JSON.stringify(transformedMessage),
         };
 
-        // Send push to all valid tokens
-        const validTokens = fcmTokens.filter((token): token is string =>
-          Boolean(token)
-        );
-        for (const token of validTokens) {
-          const result = await request.server.sendDataPush(token, pushData);
-          if (!result.success) {
-            request.log.warn(
-              { token, error: result.error },
-              "Push notification failed"
+        const pushPromises: Promise<any>[] = [];
+
+        for (const member of transactionResult.members) {
+          if (member.userId === userIdInt) {
+            continue;
+          }
+
+          // Send socket event (non-blocking)
+          if (member.userId) {
+            request.server.io
+              .to(member.userId.toString())
+              .emit("new_message", response);
+          }
+
+          const fcmTokens = member.user?.fcmToken || [];
+          if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
+            const validTokens = fcmTokens.filter((token): token is string =>
+              Boolean(token)
             );
+            
+            // Add all push promises to array for parallel execution
+            for (const token of validTokens) {
+              pushPromises.push(
+                request.server.sendDataPush(token, pushData).catch((error) => {
+                  request.log.warn(
+                    { token, error: error?.message || error },
+                    "Push notification failed"
+                  );
+                  return { success: false, error };
+                })
+              );
+            }
           }
         }
-      }
-    }
 
-    return reply.status(201).send(response);
+        if (pushPromises.length > 0) {
+          await Promise.allSettled(pushPromises);
+        }
+      } catch (error) {
+        request.log.error(error, "Error sending notifications");
+      }
+    });
+
+
+    reply.status(201).send(response);
+
   } catch (error) {
     try {
       const files = (request.files as any[]) || [];

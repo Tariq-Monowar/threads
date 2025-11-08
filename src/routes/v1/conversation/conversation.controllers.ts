@@ -242,6 +242,7 @@ export const getMyConversationsList = async (request, reply) => {
         hasPrevPage: page > 1,
       },
     });
+    
   } catch (error) {
     request.log.error(error, "Error getting conversations");
     return reply.status(500).send({

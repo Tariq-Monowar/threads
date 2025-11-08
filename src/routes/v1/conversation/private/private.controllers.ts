@@ -298,7 +298,6 @@ export const createConversation = async (request, reply) => {
 };
 
 
-
 export const deleteConversationForMe = async (request, reply) => {
   try {
     const { conversationId } = request.params;

@@ -1,128 +1,6 @@
 import { FastifyRequest, FastifyReply } from "fastify";
-import bcrypt from "bcrypt";
-import {
-  forgotPasswordEmail,
-  otpVerificationEmail,
-  sendForgotPasswordOTP,
-  sendTwoFactorOtp,
-} from "../../../../utils/email.config";
-
-import { generateJwtToken } from "../../../../utils/jwt.utils";
-import { getImageUrl } from "../../../../utils/baseurl";
 import { FileService } from "../../../../utils/fileService";
-import path from "path";
-import fs from "fs";
-import { v4 as uuidv4 } from "uuid";
-import { authenticator } from "otplib";
-import { uploadsDir } from "../../../../config/storage.config";
-
-// export const createConversation = async (request, reply) => {
-//   try {
-//     const { otherUserId, myId } = request.body;
-//     const prisma = request.server.prisma;
-
-//     const missingField = ["otherUserId", "myId"].find(
-//       (field) => !request.body[field]
-//     );
-
-//     if (missingField) {
-//       return reply.status(400).send({
-//         success: false,
-//         message: `${missingField} is required!`,
-//       });
-//     }
-
-//     const otherUserIdInt = parseInt(otherUserId);
-//     const myIdInt = parseInt(myId);
-
-//     const activeConversation = await prisma.conversation.findFirst({
-//       where: {
-//         isGroup: false,
-//         AND: [
-//           { members: { some: { userId: myIdInt, isDeleted: false } } },
-//           { members: { some: { userId: otherUserIdInt, isDeleted: false } } },
-//         ],
-//       },
-//       include: {
-//         members: { include: { user: true } },
-//       },
-//     });
-
-//     if (activeConversation) {
-//       const messages = await prisma.message.findMany({
-//         where: { conversationId: activeConversation.id },
-//         take: 50,
-//         orderBy: { createdAt: "asc" },
-//       });
-
-//       return reply.send({
-//         success: true,
-//         data: {
-//           ...activeConversation,
-//           messages,
-//         },
-//       });
-//     }
-
-//     const deletedConversation = await prisma.conversation.findFirst({
-//       where: {
-//         isGroup: false,
-//         AND: [
-//           { members: { some: { userId: myIdInt, isDeleted: true } } },
-//           { members: { some: { userId: otherUserIdInt } } },
-//         ],
-//       },
-//     });
-
-//     if (deletedConversation) {
-//       const newConversation = await prisma.conversation.create({
-//         data: {
-//           isGroup: false,
-//           members: {
-//             create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
-//           },
-//         },
-//         include: {
-//           members: { include: { user: true } },
-//         },
-//       });
-
-//       return reply.send({
-//         success: true,
-//         data: {
-//           ...newConversation,
-//           messages: [],
-//         },
-//         message: "New conversation created (previous conversation was deleted)",
-//       });
-//     }
-
-//     const conversation = await prisma.conversation.create({
-//       data: {
-//         isGroup: false,
-//         members: {
-//           create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
-//         },
-//       },
-//       include: {
-//         members: { include: { user: true } },
-//       },
-//     });
-
-//     return reply.send({
-//       success: true,
-//       data: {
-//         ...conversation,
-//         messages: [],
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error creating conversation:", error);
-//     return reply
-//       .status(500)
-//       .send({ success: false, message: "Failed to create chat" });
-//   }
-// };
+import { transformMessage } from "../../../../utils/message.utils";
 
 export const createConversation = async (request, reply) => {
   try {
@@ -132,7 +10,6 @@ export const createConversation = async (request, reply) => {
     const missingField = ["otherUserId", "myId"].find(
       (field) => !request.body[field]
     );
-
     if (missingField) {
       return reply.status(400).send({
         success: false,
@@ -140,47 +17,131 @@ export const createConversation = async (request, reply) => {
       });
     }
 
+    const currentUserId = parseInt(myId);
     const otherUserIdInt = parseInt(otherUserId);
-    const myIdInt = parseInt(myId);
 
-    const activeConversation = await prisma.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [
-          { members: { some: { userId: myIdInt, isDeleted: false } } },
-          { members: { some: { userId: otherUserIdInt, isDeleted: false } } },
-        ],
-      },
-      include: {
-        members: { include: { user: true } },
-      },
-    });
+    if (isNaN(currentUserId) || isNaN(otherUserIdInt)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user IDs provided!",
+      });
+    }
 
-    const filterForUser = (conversation, userIdToExclude: number) => {
+    //-----------------------------
+    const formatMembersWithAvatars = (members: any[]) => {
+      return members.map((member) => ({
+        ...member,
+        user: member.user
+          ? {
+              ...member.user,
+              avatar: member.user.avatar
+                ? FileService.avatarUrl(member.user.avatar)
+                : null,
+            }
+          : null,
+      }));
+    };
+
+    /**
+     * Helper: Filter conversation to exclude current user's member info
+     */
+    const excludeCurrentUserFromConversation = (
+      conversation: any,
+      currentUserId: number
+    ) => {
       if (!conversation) return null;
       return {
         ...conversation,
         members: conversation.members.filter(
-          (member) => member.userId !== userIdToExclude
+          (member: any) => member.userId !== currentUserId
         ),
       };
     };
 
-    const filterMyInfo = (conversation) => {
-      if (!conversation) return null;
-      return {
-        ...conversation,
-        members: conversation.members.filter(
-          (member) => member.userId !== myIdInt
-        ),
-      };
+    /**
+     * Helper: Get participant user IDs from conversation members
+     */
+    const getParticipantIds = (members: any[]): number[] => {
+      return members
+        .map((member) => member.userId)
+        .filter((id): id is number => typeof id === "number");
     };
 
-    if (activeConversation) {
-      const messagesRaw = await prisma.message.findMany({
+    /**
+     * Helper: Find existing active conversation between two users
+     */
+    const findActiveConversation = async (
+      prisma: any,
+      userId1: number,
+      userId2: number
+    ) => {
+      return await prisma.conversation.findFirst({
         where: {
-          conversationId: activeConversation.id,
-          NOT: { deletedForUsers: { has: myIdInt } },
+          isGroup: false,
+          AND: [
+            { members: { some: { userId: userId1, isDeleted: false } } },
+            { members: { some: { userId: userId2, isDeleted: false } } },
+          ],
+        },
+        include: {
+          members: { include: { user: true } },
+        },
+      });
+    };
+
+    /**
+     * Helper: Find deleted conversation that can be restored
+     */
+    const findDeletedConversation = async (
+      prisma: any,
+      currentUserId: number,
+      otherUserId: number
+    ) => {
+      return await prisma.conversation.findFirst({
+        where: {
+          isGroup: false,
+          AND: [
+            { members: { some: { userId: currentUserId, isDeleted: true } } },
+            { members: { some: { userId: otherUserId } } },
+          ],
+        },
+      });
+    };
+
+    /**
+     * Helper: Create a new private conversation
+     */
+    const createNewPrivateConversation = async (
+      prisma: any,
+      userId1: number,
+      userId2: number
+    ) => {
+      return await prisma.conversation.create({
+        data: {
+          isGroup: false,
+          members: {
+            create: [{ userId: userId1 }, { userId: userId2 }],
+          },
+        },
+        include: {
+          members: { include: { user: true } },
+        },
+      });
+    };
+
+    /**
+     * Helper: Fetch and transform messages for a conversation
+     */
+    const fetchAndTransformMessages = async (
+      prisma: any,
+      conversationId: string,
+      currentUserId: number,
+      participantIds: number[]
+    ) => {
+      const messages = await prisma.message.findMany({
+        where: {
+          conversationId,
+          NOT: { deletedForUsers: { has: currentUserId } },
         },
         take: 50,
         orderBy: { createdAt: "asc" },
@@ -192,188 +153,151 @@ export const createConversation = async (request, reply) => {
         },
       });
 
-      const memberUserIds = (activeConversation.members || [])
-        .map((mem) => mem.userId)
-        .filter(Boolean) as number[];
-
-      const transformedMessages = messagesRaw.map((m: any) => ({
-        ...(() => {
-          const clone = { ...m } as any;
-          if ("deletedForUsers" in clone) delete clone.deletedForUsers;
-          return clone;
-        })(),
-        senderId: m.userId,
-        receiverId: memberUserIds.filter((uid) => uid !== m.userId),
-        user: m.user
-          ? {
-              ...m.user,
-              avatar: m.user.avatar ? FileService.avatarUrl(m.user.avatar) : null,
-            }
-          : m.user,
-        MessageFile: (m.MessageFile || []).map((f: any) => ({
-          ...f,
-          fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
-        })),
-      }));
-
-      const filtered = filterMyInfo(activeConversation);
-      const membersWithAvatar = filtered.members.map((mem: any) => ({
-        ...mem,
-        user: mem.user
-          ? {
-              ...mem.user,
-              avatar: mem.user.avatar
-                ? FileService.avatarUrl(mem.user.avatar)
-                : null,
-            }
-          : null,
-      }));
-
-      return reply.send({
-        success: true,
-        data: {
-          ...filtered,
-          members: membersWithAvatar,
-          messages: transformedMessages,
-        },
-      });
-    }
-
-    const deletedConversation = await prisma.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [
-          { members: { some: { userId: myIdInt, isDeleted: true } } },
-          { members: { some: { userId: otherUserIdInt } } },
-        ],
-      },
-    });
-
-    if (deletedConversation) {
-      const newConversation = await prisma.conversation.create({
-        data: {
-          isGroup: false,
-          members: {
-            create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
-          },
-        },
-        include: {
-          members: { include: { user: true } },
-        },
-      });
-
-      const otherMember = newConversation.members.find(
-        (m) => m.userId !== myIdInt
+      return messages.map((message: any) =>
+        transformMessage(message, participantIds)
       );
-      if (otherMember?.userId) {
+    };
 
-        let data = {
-          ...filterForUser(newConversation, otherMember.userId),
-          messages: [],
-        };
-  
-        console.log(data);
-        
-        request.server.io
-          .to(otherMember.userId.toString())
-          .emit("conversation_created", {
-            success: true,
-            data: {
-              ...filterForUser(newConversation, otherMember.userId),
-              messages: [],
-            },
-          });
-      }
+    /**
+     * Helper: Emit socket event to other user about new conversation
+     */
+    const notifyOtherUser = (
+      io: any,
+      otherUserId: number,
+      conversation: any,
+      currentUserId: number
+    ) => {
+      const conversationForOtherUser = excludeCurrentUserFromConversation(
+        conversation,
+        otherUserId
+      );
 
-      {
-        const filtered = filterMyInfo(newConversation);
-        const membersWithAvatar = filtered.members.map((mem: any) => ({
-          ...mem,
-          user: mem.user
-            ? {
-                ...mem.user,
-                avatar: mem.user.avatar
-                  ? FileService.avatarUrl(mem.user.avatar)
-                  : null,
-              }
-            : null,
-        }));
-
-        return reply.send({
+      if (conversationForOtherUser) {
+        io.to(otherUserId.toString()).emit("conversation_created", {
           success: true,
           data: {
-            ...filtered,
-            members: membersWithAvatar,
+            ...conversationForOtherUser,
             messages: [],
           },
-          message: "New conversation created (previous conversation was deleted)",
         });
       }
-    }
+    };
 
-    const conversation = await prisma.conversation.create({
-      data: {
-        isGroup: false,
-        members: {
-          create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
+    /**
+     * Helper: Prepare conversation response for current user
+     */
+    const prepareConversationResponse = (
+      conversation: any,
+      currentUserId: number,
+      messages: any[] = [],
+      customMessage?: string
+    ) => {
+      const filteredConversation = excludeCurrentUserFromConversation(
+        conversation,
+        currentUserId
+      );
+
+      if (!filteredConversation) {
+        return null;
+      }
+
+      const formattedMembers = formatMembersWithAvatars(
+        filteredConversation.members
+      );
+
+      const response: any = {
+        success: true,
+        data: {
+          ...filteredConversation,
+          members: formattedMembers,
+          messages,
         },
-      },
-      include: {
-        members: { include: { user: true } },
-      },
-    });
-
-    const otherMember = conversation.members.find((m) => m.userId !== myIdInt);
-
-    if (otherMember?.userId) {
-      let data = {
-        ...filterForUser(conversation, otherMember.userId),
-        messages: [],
       };
 
-      console.log(data);
+      if (customMessage) {
+        response.message = customMessage;
+      }
 
-      request.server.io
-        .to(otherMember.userId.toString())
-        .emit("conversation_created", {
-          success: true,
-          data: {
-            ...filterForUser(conversation, otherMember.userId),
-            messages: [],
-          },
-        });
+      return response;
+    };
+    //-----------------------------
+
+    const existingConversation = await findActiveConversation(
+      prisma,
+      currentUserId,
+      otherUserIdInt
+    );
+
+    if (existingConversation) {
+      const participantIds = getParticipantIds(existingConversation.members);
+      const messages = await fetchAndTransformMessages(
+        prisma,
+        existingConversation.id,
+        currentUserId,
+        participantIds
+      );
+
+      const response = prepareConversationResponse(
+        existingConversation,
+        currentUserId,
+        messages
+      );
+
+      return reply.send(response);
     }
 
-    {
-      const filtered = filterMyInfo(conversation);
-      const membersWithAvatar = filtered.members.map((mem: any) => ({
-        ...mem,
-        user: mem.user
-          ? {
-              ...mem.user,
-              avatar: mem.user.avatar
-                ? FileService.avatarUrl(mem.user.avatar)
-                : null,
-            }
-          : null,
-      }));
+    // Check for deleted conversation (for message only, we always create new)
+    const deletedConversation = await findDeletedConversation(
+      prisma,
+      currentUserId,
+      otherUserIdInt
+    );
 
-      return reply.send({
-        success: true,
-        data: {
-          ...filtered,
-          members: membersWithAvatar,
-          messages: [],
-        },
-      });
+    // Always create a new conversation
+    const newConversation = await createNewPrivateConversation(
+      prisma,
+      currentUserId,
+      otherUserIdInt
+    );
+
+    // Notify other user via socket
+    const otherMember = newConversation.members.find(
+      (member: any) => member.userId !== currentUserId
+    );
+
+    if (otherMember?.userId) {
+      notifyOtherUser(
+        request.server.io,
+        otherMember.userId,
+        newConversation,
+        currentUserId
+      );
     }
+
+    // Prepare response
+    const responseMessage = deletedConversation
+      ? "New conversation created (previous conversation was deleted)"
+      : undefined;
+
+    const response = prepareConversationResponse(
+      newConversation,
+      currentUserId,
+      [],
+      responseMessage
+    );
+
+    return reply.send(response);
   } catch (error) {
-    console.error("Error creating conversation:", error);
-    return reply
-      .status(500)
-      .send({ success: false, message: "Failed to create chat" });
+    request.log.error(error, "Error creating conversation");
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to create conversation",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
+
+
 
 export const deleteConversationForMe = async (request, reply) => {
   try {
@@ -404,6 +328,9 @@ export const deleteConversationForMe = async (request, reply) => {
     return reply.send({
       success: true,
       message: "Conversation deleted successfully",
+      data: {
+        conversationId,
+      },
     });
   } catch (error) {
     return reply

@@ -15,6 +15,7 @@ import { v4 as uuidv4 } from "uuid";
 import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
 import { FileService } from "../../../utils/fileService";
+import { transformMessage } from "../../../utils/message.utils";
 
 export const deleteMessage = async (request, reply) => {
   try {
@@ -185,30 +186,14 @@ export const sendMessage = async (request, reply) => {
       return { message, members };
     });
 
-    const transformedMessage = {
-      ...transactionResult.message,
-      senderId: userIdInt,
-      receiverId: transactionResult.members
-        .filter((member) => member.userId !== userIdInt)
-        .map((member) => member.userId),
-      user: transactionResult.message?.user
-        ? {
-            ...transactionResult.message.user,
-            avatar: transactionResult.message.user.avatar
-              ? FileService.avatarUrl(transactionResult.message.user.avatar)
-              : null,
-          }
-        : transactionResult.message?.user,
-      MessageFile:
-        (transactionResult.message as any)?.MessageFile?.map((f: any) => ({
-          ...f,
-          fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
-        })) || [],
-    } as any;
+    const participantIds = transactionResult.members
+      .map((m) => m.userId)
+      .filter((id): id is number => typeof id === "number");
 
-    if ("deletedForUsers" in transformedMessage) {
-      delete (transformedMessage as any).deletedForUsers;
-    }
+    const transformedMessage = transformMessage(
+      transactionResult.message,
+      participantIds
+    );
 
     const response = {
       success: true,
@@ -545,23 +530,19 @@ export const updateMessage = async (request, reply) => {
       });
     });
 
-    const transformed = {
-      ...updated,
-      user: updated.user
-        ? {
-            ...updated.user,
-            avatar: updated.user.avatar
-              ? FileService.avatarUrl(updated.user.avatar)
-              : null,
-          }
-        : updated.user,
-      MessageFile: (updated.MessageFile || []).map((f: any) => ({
-        ...f,
-        fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
-      })),
-    } as any;
-    if ("deletedForUsers" in transformed)
-      delete (transformed as any).deletedForUsers;
+    const members = await prisma.conversationMember.findMany({
+      where: {
+        conversationId: existing.conversationId,
+        isDeleted: false,
+      },
+      select: { userId: true },
+    });
+
+    const participantIds = members
+      .map((m) => m.userId)
+      .filter((id): id is number => typeof id === "number");
+
+    const transformed = transformMessage(updated, participantIds);
 
     const response = {
       success: true,
@@ -569,15 +550,8 @@ export const updateMessage = async (request, reply) => {
       data: transformed,
     };
 
-    const members = await prisma.conversationMember.findMany({
-      where: {
-        conversationId: existing.conversationId,
-        isDeleted: false,
-        userId: { not: myIdInt },
-      },
-      select: { userId: true },
-    });
-    members.forEach((member) => {
+    const otherMembers = members.filter((m) => m.userId !== myIdInt);
+    otherMembers.forEach((member) => {
       if (member.userId) {
         request.server.io
           .to(member.userId.toString())
@@ -778,26 +752,7 @@ export const getMessages = async (request, reply) => {
     const hasMore = rows.length > perPage;
     const pageRows = hasMore ? rows.slice(0, perPage) : rows;
 
-    const data = pageRows.map((m: any) => ({
-      ...(() => {
-        const clone = { ...m } as any;
-        if ("deletedForUsers" in clone) delete clone.deletedForUsers;
-        return clone;
-      })(),
-      // Align with sendMessage shape
-      senderId: typeof m.userId === "number" ? m.userId : null,
-      receiverId: participantIds.filter((id) => id !== m.userId),
-      user: m.user
-        ? {
-            ...m.user,
-            avatar: m.user.avatar ? FileService.avatarUrl(m.user.avatar) : null,
-          }
-        : m.user,
-      MessageFile: (m.MessageFile || []).map((f: any) => ({
-        ...f,
-        fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
-      })),
-    }));
+    const data = pageRows.map((m: any) => transformMessage(m, participantIds));
 
     return reply.send({
       success: true,

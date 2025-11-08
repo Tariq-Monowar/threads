@@ -1,5 +1,6 @@
 import { getImageUrl } from "../../../utils/baseurl";
 import { FileService } from "../../../utils/fileService";
+import { transformMessage } from "../../../utils/message.utils";
 
 export const getMyConversationsList = async (request, reply) => {
   try {
@@ -105,33 +106,6 @@ export const getMyConversationsList = async (request, reply) => {
       return [...currentUser, ...others].slice(0, 3);
     };
 
-    const transformMessage = (msg: any, memberUserIds: number[]) => {
-      const base = (() => {
-        const clone = { ...msg } as any;
-        if ("deletedForUsers" in clone) delete clone.deletedForUsers;
-        return clone;
-      })();
-
-      const receiverIds = memberUserIds.filter((uid) => uid !== base.userId);
-
-      return {
-        ...base,
-        senderId: base.userId,
-        receiverId: receiverIds,
-        user: base.user
-          ? {
-              ...base.user,
-              avatar: base.user.avatar
-                ? FileService.avatarUrl(base.user.avatar)
-                : null,
-            }
-          : base.user,
-        MessageFile: (base.MessageFile || []).map((f: any) => ({
-          ...f,
-          fileUrl: f?.fileUrl ? getImageUrl(f.fileUrl) : f.fileUrl,
-        })),
-      };
-    };
 
     const transformedConversations = await Promise.all(
       conversations.map(async (conv) => {
@@ -150,7 +124,9 @@ export const getMyConversationsList = async (request, reply) => {
         return {
           ...conv,
           members: processMembers(conv.members, conv.isGroup),
-          messages: conv.messages.map((msg: any) => transformMessage(msg, memberUserIds)),
+          messages: conv.messages.map((msg: any) =>
+            transformMessage(msg, memberUserIds)
+          ),
           avatar: conv.avatar ? FileService.avatarUrl(conv.avatar) : null,
           unreadCount,
         };

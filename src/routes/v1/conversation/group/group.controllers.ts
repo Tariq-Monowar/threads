@@ -130,7 +130,7 @@ const formatConversationResponse = (conversation: any, currentUserId?: number) =
   return {
     ...conversation,
     avatar: conversation.avatar
-      ? FileService.avatarUrl(conversation.avatar)
+      ? getImageUrl(conversation.avatar)
       : null,
     members: conversation.members.map((member: any) => ({
       ...member,
@@ -164,18 +164,37 @@ const parseUserIds = (userIds: any[]): number[] => {
 
 export const createGroupChat = async (request, reply) => {
   try {
-    const { name, userIds, adminId, avatar } = request.body;
+    const { name, userIds, adminId } = request.body;
     const prisma = request.server.prisma;
 
-    // Validate required fields
+    // Get avatar from file upload (if provided)
+    const avatarFile = (request.file as any) || null;
+    const avatar = avatarFile?.filename || null;
+
+    // Validate required fields (name and avatar are optional)
     if (!userIds || !adminId) {
       return reply.status(400).send({
         success: false,
-        message: "Group name, userIds, and adminId are required!",
+        message: "userIds and adminId are required!",
       });
     }
 
-    if (!Array.isArray(userIds) || userIds.length < 2) {
+    // Parse userIds if it's a string (from form-data)
+    let parsedUserIds: any[] = userIds;
+    if (typeof userIds === "string") {
+      try {
+        parsedUserIds = JSON.parse(userIds);
+      } catch (error) {
+        // If JSON parse fails, try splitting by comma
+        parsedUserIds = userIds
+          .replace(/[\[\]]/g, "")
+          .split(",")
+          .map((id: string) => id.trim())
+          .filter(Boolean);
+      }
+    }
+
+    if (!Array.isArray(parsedUserIds) || parsedUserIds.length < 2) {
       return reply.status(400).send({
         success: false,
         message: "At least 2 users are required to create a group",
@@ -183,9 +202,9 @@ export const createGroupChat = async (request, reply) => {
     }
 
     const adminIdInt = parseInt(adminId);
-    const userIdsInt = parseUserIds(userIds);
+    const userIdsInt = parseUserIds(parsedUserIds);
 
-    if (isNaN(adminIdInt) || userIdsInt.length !== userIds.length) {
+    if (isNaN(adminIdInt) || userIdsInt.length !== parsedUserIds.length) {
       return reply.status(400).send({
         success: false,
         message: "Invalid user IDs provided!",
@@ -206,9 +225,9 @@ export const createGroupChat = async (request, reply) => {
     // Create group conversation
     const conversation = await prisma.conversation.create({
       data: {
-        name,
+        name: name || null,
         isGroup: true,
-        avatar,
+        avatar: avatar || null,
         adminId: adminIdInt,
         members: {
           create: [
@@ -971,9 +990,137 @@ export const destroyGroup = async (request, reply) => {
   }
 };
 
+export const updateGroupInfo = async (request, reply) => {
+  try {
+    const { userId, name } = request.body;
+    const { conversationId } = request.params;
+    const prisma = request.server.prisma;
 
+    // Validate required fields
+    if (!conversationId || !userId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId and userId are required!",
+      });
+    }
 
+    const userIdInt = parseInt(userId);
+    if (isNaN(userIdInt)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid userId provided!",
+      });
+    }
 
+    // Verify conversation exists and is a group
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        isGroup: true,
+      },
+      select: {
+        id: true,
+        avatar: true,
+        allowEditGroupInfo: true,
+      },
+    });
+
+    if (!conversation) {
+      return reply.status(404).send({
+        success: false,
+        message: "Group not found",
+      });
+    }
+
+    // Verify user is member
+    const member = await verifyGroupMember(prisma, conversationId, userIdInt);
+
+    if (!member) {
+      return reply.status(403).send({
+        success: false,
+        message: "You are not a member of this group",
+      });
+    }
+
+    // Check permissions: admin can always edit, members can edit if allowEditGroupInfo is true
+    const isAdmin = member.isAdmin;
+    const canEdit = isAdmin || conversation.allowEditGroupInfo;
+
+    if (!canEdit) {
+      return reply.status(403).send({
+        success: false,
+        message: "You don't have permission to edit group info",
+      });
+    }
+
+    // Get new avatar from file upload (if provided)
+    const avatarFile = (request.file as any) || null;
+    const newAvatar = avatarFile?.filename || null;
+
+    // Build update data
+    const updateData: any = {};
+    
+    if (name !== undefined) {
+      updateData.name = name || null;
+    }
+
+    if (newAvatar) {
+      // Delete old avatar file if exists
+      if (conversation.avatar) {
+        try {
+          FileService.removeFiles([conversation.avatar]);
+        } catch (error) {
+          request.log.warn({ error }, "Failed to delete old avatar");
+        }
+      }
+      updateData.avatar = newAvatar;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "At least name or avatar must be provided",
+      });
+    }
+
+    // Update conversation
+    const updatedConversation = await prisma.conversation.update({
+      where: { id: conversationId },
+      data: updateData,
+    });
+
+    // Get full conversation details
+    const fullConversation = await getGroupConversationWithDetails(
+      prisma,
+      conversationId,
+      userIdInt
+    );
+
+    const formattedConversation =
+      formatConversationResponse(fullConversation, userIdInt);
+
+    return reply.send({
+      success: true,
+      message: "Group info updated successfully",
+      data: formattedConversation,
+    });
+  } catch (error) {
+    // Clean up uploaded file on error
+    try {
+      const avatarFile = (request.file as any) || null;
+      if (avatarFile?.filename) {
+        FileService.removeFiles([avatarFile.filename]);
+      }
+    } catch (_) {}
+
+    request.log.error(error, "Error updating group info");
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to update group info",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
 
 
 

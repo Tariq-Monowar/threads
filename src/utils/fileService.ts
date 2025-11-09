@@ -41,6 +41,6 @@ export class FileService {
   }
 
   static avatarUrl(avatar: string): string {
-    return `https://deficall.defilinkteam.org/api/${avatar}`;
+    return `https://deficall.defilinkteam.org/${avatar}`;
   }
 }

@@ -182,17 +182,17 @@ const parseUserIdsFromRequest = (userIds: any): any[] => {
     return userIds;
   }
 
-  if (typeof userIds === "string") {
-    try {
+    if (typeof userIds === "string") {
+      try {
       return JSON.parse(userIds);
     } catch {
       return userIds
-        .replace(/[\[\]]/g, "")
-        .split(",")
-        .map((id: string) => id.trim())
-        .filter(Boolean);
+          .replace(/[\[\]]/g, "")
+          .split(",")
+          .map((id: string) => id.trim())
+          .filter(Boolean);
+      }
     }
-  }
 
   return [];
 };
@@ -203,15 +203,15 @@ const validateCreateGroupRequest = (userIds: any, adminId: any) => {
   }
 
   const parsedUserIds = parseUserIdsFromRequest(userIds);
-  if (!Array.isArray(parsedUserIds) || parsedUserIds.length < 2) {
+    if (!Array.isArray(parsedUserIds) || parsedUserIds.length < 2) {
     return {
       valid: false,
-      message: "At least 2 users are required to create a group",
+        message: "At least 2 users are required to create a group",
     };
-  }
+    }
 
   const adminIdInt = parseUserId(adminId);
-  const userIdsInt = parseUserIds(parsedUserIds);
+    const userIdsInt = parseUserIds(parsedUserIds);
 
   if (!adminIdInt || userIdsInt.length !== parsedUserIds.length) {
     return { valid: false, message: "Invalid user IDs provided!" };
@@ -235,33 +235,33 @@ const createGroupConversation = async (
   userIds
 ) => {
   return await prisma.conversation.create({
-    data: {
-      name: name || null,
-      isGroup: true,
-      avatar: avatar || null,
+      data: {
+        name: name || null,
+        isGroup: true,
+        avatar: avatar || null,
       adminId,
-      members: {
+        members: {
         create: createGroupMembers(adminId, userIds),
+        },
       },
-    },
-    include: {
-      members: {
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatar: true,
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
             },
           },
         },
-      },
-      messages: {
+        messages: {
         take: 0,
+        },
       },
-    },
-  });
+    });
 };
 
 export const createGroupChat = async (request: any, reply: any) => {
@@ -429,19 +429,19 @@ const validateAddUsersRequest = (
   userIds: any,
   adminId: any
 ) => {
-  if (!conversationId || !userIds || !adminId) {
+    if (!conversationId || !userIds || !adminId) {
     return {
       valid: false,
-      message: "conversationId, userIds, and adminId are required!",
+        message: "conversationId, userIds, and adminId are required!",
     };
-  }
+    }
 
-  if (!Array.isArray(userIds) || userIds.length === 0) {
+    if (!Array.isArray(userIds) || userIds.length === 0) {
     return { valid: false, message: "userIds must be a non-empty array" };
-  }
+    }
 
   const adminIdInt = parseUserId(adminId);
-  const userIdsInt = parseUserIds(userIds);
+    const userIdsInt = parseUserIds(userIds);
 
   if (!adminIdInt || userIdsInt.length !== userIds.length) {
     return { valid: false, message: "Invalid user IDs provided!" };
@@ -526,6 +526,43 @@ const getAllGroupMemberIds = async (prisma: any, conversationId: string) => {
     .filter((id): id is number => typeof id === "number");
 };
 
+const fetchMembersWithUsers = async (
+  prisma: any,
+  conversationId: string,
+  userIds: number[]
+) => {
+  const members = await prisma.conversationMember.findMany({
+    where: {
+      conversationId,
+      userId: { in: userIds },
+      isDeleted: false,
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar: true,
+        },
+      },
+    },
+  });
+  return members;
+};
+
+const formatMembers = (members: any[]) => {
+  return members.map((m) => ({
+    ...m,
+    user: m.user
+      ? {
+          ...m.user,
+          avatar: m.user.avatar ? FileService.avatarUrl(m.user.avatar) : null,
+        }
+      : null,
+  }));
+};
+
 const emitUsersAddedToGroup = (
   io: any,
   conversationId: string,
@@ -537,7 +574,7 @@ const emitUsersAddedToGroup = (
     message: "Users added to group",
     data: {
       conversationId,
-      addedUsers,
+      members: addedUsers,
     },
   };
 
@@ -561,6 +598,8 @@ const emitUsersAddedToGroup = (
                         "email": "deficall",
                         "avatar": "https://deficall.defilinkteam.org/sys/stores/1718442677332.jpg"
                     }
+
+                    //send emit to new 
 */
 
 export const addUsersToGroup = async (request: any, reply: any) => {
@@ -633,7 +672,12 @@ export const addUsersToGroup = async (request: any, reply: any) => {
 
     await addUsersToGroupMembers(prisma, conversationId, userIdsInt);
 
-    const addedUsers = await getAddedUsersInfo(prisma, userIdsInt);
+    const addedMembersRaw = await fetchMembersWithUsers(
+      prisma,
+      conversationId,
+      userIdsInt
+    );
+    const addedUsers = formatMembers(addedMembersRaw);
     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
 
     setImmediate(() => {
@@ -651,7 +695,7 @@ export const addUsersToGroup = async (request: any, reply: any) => {
 
     return sendSuccessResponse(reply, "Users added successfully", {
       conversationId,
-      addedUsers,
+      members: addedUsers,
     });
   } catch (error: any) {
     request.log.error(error, "Error adding users to group");
@@ -694,17 +738,17 @@ const checkUsersInGroup = async (
   conversationId: string,
   userIds: number[]
 ) => {
-  const existingMembers = await prisma.conversationMember.findMany({
-    where: {
-      conversationId,
+    const existingMembers = await prisma.conversationMember.findMany({
+      where: {
+        conversationId,
       userId: { in: userIds },
-      isDeleted: false,
-    },
-  });
+        isDeleted: false,
+      },
+    });
 
-  const existingUserIds = existingMembers
-    .map((member) => member.userId)
-    .filter(Boolean);
+      const existingUserIds = existingMembers
+        .map((member) => member.userId)
+        .filter(Boolean);
   const nonExistingUsers = userIds.filter(
     (userId) => !existingUserIds.includes(userId)
   );
@@ -719,7 +763,7 @@ const removeUsersFromGroupMembers = async (
 ) => {
   await prisma.conversationMember.deleteMany({
     where: {
-      conversationId,
+        conversationId,
       userId: { in: userIds },
     },
   });
@@ -751,11 +795,11 @@ const emitUsersRemovedFromGroup = (
   allMemberIds: number[]
 ) => {
   const socketData = {
-    success: true,
+      success: true,
     message: "Users removed from group",
     data: {
       conversationId,
-      removedUsers,
+      members: removedUsers,
     },
   };
 
@@ -824,7 +868,12 @@ export const removeUsersFromGroup = async (request: any, reply: any) => {
       );
     }
 
-    const removedUsers = await getRemovedUsersInfo(prisma, userIdsInt);
+    const removedMembersRaw = await fetchMembersWithUsers(
+      prisma,
+      conversationId,
+      userIdsInt
+    );
+    const removedUsers = formatMembers(removedMembersRaw);
     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
 
     await removeUsersFromGroupMembers(prisma, conversationId, userIdsInt);
@@ -844,7 +893,7 @@ export const removeUsersFromGroup = async (request: any, reply: any) => {
 
     return sendSuccessResponse(reply, "Users removed successfully", {
       conversationId,
-      removedUsers,
+      members: removedUsers,
     });
   } catch (error: any) {
     request.log.error(error, "Error removing users from group");
@@ -886,13 +935,13 @@ const checkOtherAdminsExist = async (
   currentUserId: number
 ): Promise<boolean> => {
   const otherAdmins = await prisma.conversationMember.findMany({
-    where: {
-      conversationId,
+      where: {
+        conversationId,
       userId: { not: currentUserId },
       isAdmin: true,
-      isDeleted: false,
-    },
-  });
+        isDeleted: false,
+      },
+    });
 
   return otherAdmins.length > 0;
 };
@@ -933,8 +982,8 @@ const getLeavingUserInfo = async (prisma: any, userId: number) => {
       name: true,
       email: true,
       avatar: true,
-    },
-  });
+      },
+    });
 
   if (!user) return null;
 
@@ -949,15 +998,15 @@ const getLeavingUserInfo = async (prisma: any, userId: number) => {
 const emitUserLeftGroup = (
   io: any,
   conversationId: string,
-  leavingUser: any,
+  leavingMembers: any[],
   allMemberIds: number[]
 ) => {
   const socketData = {
-    success: true,
+      success: true,
     message: "User left group",
     data: {
       conversationId,
-      leavingUser,
+      members: leavingMembers,
     },
   };
 
@@ -1009,7 +1058,12 @@ export const leaveFromGroup = async (request: any, reply: any) => {
       }
     }
 
-    const leavingUser = await getLeavingUserInfo(prisma, userIdInt);
+    const leavingMemberRaw = await fetchMembersWithUsers(
+      prisma,
+      conversationId,
+      [userIdInt]
+    );
+    const leavingMembers = formatMembers(leavingMemberRaw);
     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
 
     if (member.isAdmin && conversation.adminId === userIdInt) {
@@ -1026,7 +1080,7 @@ export const leaveFromGroup = async (request: any, reply: any) => {
         emitUserLeftGroup(
           request.server.io,
           conversationId,
-          leavingUser,
+          leavingMembers,
           allMemberIds
         );
       } catch (error) {
@@ -1035,8 +1089,8 @@ export const leaveFromGroup = async (request: any, reply: any) => {
     });
 
     return sendSuccessResponse(reply, "Left group successfully", {
-      conversationId,
-      leavingUser,
+        conversationId,
+      members: leavingMembers,
     });
   } catch (error: any) {
     request.log.error(error, "Error leaving group");
@@ -1053,10 +1107,10 @@ const validateMakeAdminRequest = (
   targetUserId: any,
   adminId: any
 ) => {
-  if (!conversationId || !targetUserId || !adminId) {
+    if (!conversationId || !targetUserId || !adminId) {
     return {
       valid: false,
-      message: "conversationId, targetUserId, and adminId are required!",
+        message: "conversationId, targetUserId, and adminId are required!",
     };
   }
 
@@ -1134,20 +1188,19 @@ export const makeGroupAdmin = async (request: any, reply: any) => {
 
     await addAdminRights(prisma, conversationId, targetMember.id);
 
-    const updatedConversation = await getGroupConversationWithDetails(
+    const memberAfterUpdateRaw = await fetchMembersWithUsers(
       prisma,
       conversationId,
-      adminIdInt
+      [targetUserIdInt]
     );
-
-    const formattedConversation = formatConversationResponse(
-      updatedConversation,
-      adminIdInt
-    );
+    const memberAfterUpdate = formatMembers(memberAfterUpdateRaw);
     return sendSuccessResponse(
       reply,
       "User promoted to admin successfully",
-      formattedConversation
+      {
+        conversationId,
+        members: memberAfterUpdate,
+      }
     );
   } catch (error: any) {
     request.log.error(error, "Error making group admin");
@@ -1164,10 +1217,10 @@ const validateRemoveAdminRequest = (
   targetUserId: any,
   adminId: any
 ) => {
-  if (!conversationId || !targetUserId || !adminId) {
+    if (!conversationId || !targetUserId || !adminId) {
     return {
       valid: false,
-      message: "conversationId, targetUserId, and adminId are required!",
+        message: "conversationId, targetUserId, and adminId are required!",
     };
   }
 
@@ -1246,7 +1299,7 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
 
     const targetMember = await findAdminMember(
       prisma,
-      conversationId,
+        conversationId,
       targetUserIdInt
     );
     if (!targetMember) {
@@ -1255,20 +1308,19 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
 
     await removeAdminRights(prisma, targetMember.id);
 
-    const updatedConversation = await getGroupConversationWithDetails(
+    const memberAfterUpdateRaw = await fetchMembersWithUsers(
       prisma,
       conversationId,
-      adminIdInt
+      [targetUserIdInt]
     );
-
-    const formattedConversation = formatConversationResponse(
-      updatedConversation,
-      adminIdInt
-    );
+    const memberAfterUpdate = formatMembers(memberAfterUpdateRaw);
     return sendSuccessResponse(
       reply,
       "Admin rights removed successfully",
-      formattedConversation
+      {
+        conversationId,
+        members: memberAfterUpdate,
+      }
     );
   } catch (error: any) {
     request.log.error(error, "Error removing group admin");
@@ -1281,10 +1333,10 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
 // ============================================================================
 
 const validateDestroyGroupRequest = (conversationId: any, adminId: any) => {
-  if (!conversationId || !adminId) {
+    if (!conversationId || !adminId) {
     return {
       valid: false,
-      message: "conversationId and adminId are required!",
+        message: "conversationId and adminId are required!",
     };
   }
 
@@ -1297,14 +1349,14 @@ const validateDestroyGroupRequest = (conversationId: any, adminId: any) => {
 };
 
 const deleteGroupAndMembers = async (prisma: any, conversationId: string) => {
-  await prisma.$transaction([
-    prisma.conversationMember.deleteMany({
-      where: { conversationId },
-    }),
-    prisma.conversation.delete({
-      where: { id: conversationId },
-    }),
-  ]);
+    await prisma.$transaction([
+      prisma.conversationMember.deleteMany({
+        where: { conversationId },
+      }),
+      prisma.conversation.delete({
+        where: { id: conversationId },
+      }),
+    ]);
 };
 
 export const destroyGroup = async (request: any, reply: any) => {
@@ -1337,7 +1389,7 @@ export const destroyGroup = async (request: any, reply: any) => {
     await deleteGroupAndMembers(prisma, conversationId);
 
     return sendSuccessResponse(reply, "Group destroyed successfully", {
-      conversationId,
+        conversationId,
     });
   } catch (error: any) {
     request.log.error(error, "Error destroying group");

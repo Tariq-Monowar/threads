@@ -11,7 +11,6 @@ import {
   updateGroupInfo,
 } from "./group.controllers";
 import { upload } from "../../../../config/storage.config";
-import { verifyUser } from "../../../../middleware/auth.middleware";
 
 const groupRoutes = (fastify: FastifyInstance) => {
   fastify.post("/", { preHandler: upload.single("avatar") }, createGroupChat);

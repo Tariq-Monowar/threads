@@ -1,3 +1,5 @@
+import { FileService } from "../../../utils/fileService";
+
 export const registerUser = async (request, reply) => {
   try {
     const { id, name, email, avatar, address } = request.body;
@@ -302,10 +304,24 @@ export const searchUsers = async (request, reply) => {
       });
     }
 
+  //  res:-  "data": [
+  //     {
+  //         "id": 1469,
+  //         "name": "A T M Waliullah",
+  //         "email": "touchmethodbd@gmail.com",
+  //         "avatar": add baseurl to "sys/stores/",
+  //         "address": "",
+  //         "createdAt": "2025-10-28T08:41:53.299Z"
+  //     }
+  // ],
+
     return reply.status(200).send({
       success: true,
       message: "Users retrieved successfully",
-      data: users,
+      data: users.map((user) => ({
+        ...user,
+        avatar: user.avatar ? `${FileService.avatarUrl(user.avatar)}` : null,
+      })),
       pagination: {
         currentPage: pageNum,
         totalPages,

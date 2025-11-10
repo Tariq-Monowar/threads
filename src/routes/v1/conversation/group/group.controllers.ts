@@ -546,6 +546,23 @@ const emitUsersAddedToGroup = (
   });
 };
 
+
+/*
+                {
+                    "id": "cmhsnblo70004kgd8yq6xnp6m",
+                    "userId": 1,
+                    "conversationId": "cmhsnblo70001kgd8f83zoqmp",
+                    "isAdmin": false,
+                    "isDeleted": false,
+                    "deletedAt": null,
+                    "user": {
+                        "id": 1,
+                        "name": "deficall.org",
+                        "email": "deficall",
+                        "avatar": "https://deficall.defilinkteam.org/sys/stores/1718442677332.jpg"
+                    }
+*/
+
 export const addUsersToGroup = async (request: any, reply: any) => {
   try {
     const { userIds, adminId } = request.body;

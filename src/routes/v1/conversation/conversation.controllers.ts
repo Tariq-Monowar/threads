@@ -1,3 +1,4 @@
+import { baseUrl, getImageUrl } from "../../../utils/baseurl";
 import { FileService } from "../../../utils/fileService";
 import { transformMessage } from "../../../utils/message.utils";
 
@@ -120,7 +121,7 @@ export const getMyConversationsList = async (request, reply) => {
           transformMessage(message, participantIds)
         ),
         avatar: conversation.avatar
-          ? FileService.avatarUrl(conversation.avatar)
+          ? getImageUrl(conversation.avatar)
           : null,
         unreadCount,
       };

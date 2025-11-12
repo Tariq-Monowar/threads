@@ -16,7 +16,7 @@ const parseUserIds = (userIds) => {
   return userIds.map((id) => parseInt(id)).filter((id) => !isNaN(id));
 };
 
-const parseUserId = (userId)=> {
+const parseUserId = (userId) => {
   const parsed = parseInt(userId);
   return isNaN(parsed) ? null : parsed;
 };
@@ -177,183 +177,274 @@ const sendSuccessResponse = (
 // CREATE GROUP CHAT HELPERS
 // ============================================================================
 
-const parseUserIdsFromRequest = (userIds: any): any[] => {
-  if (Array.isArray(userIds)) {
-    return userIds;
-  }
+// const parseUserIdsFromRequest = (userIds: any): any[] => {
+//   if (Array.isArray(userIds)) {
+//     return userIds;
+//   }
 
-    if (typeof userIds === "string") {
-      try {
-      return JSON.parse(userIds);
-    } catch {
-      return userIds
-          .replace(/[\[\]]/g, "")
-          .split(",")
-          .map((id: string) => id.trim())
-          .filter(Boolean);
-      }
+//     if (typeof userIds === "string") {
+//       try {
+//       return JSON.parse(userIds);
+//     } catch {
+//       return userIds
+//           .replace(/[\[\]]/g, "")
+//           .split(",")
+//           .map((id: string) => id.trim())
+//           .filter(Boolean);
+//       }
+//     }
+
+//   return [];
+// };
+
+// const validateCreateGroupRequest = (userIds: any, adminId: any) => {
+//   if (!userIds || !adminId) {
+//     return { valid: false, message: "userIds and adminId are required!" };
+//   }
+
+//   const parsedUserIds = parseUserIdsFromRequest(userIds);
+//     if (!Array.isArray(parsedUserIds) || parsedUserIds.length < 2) {
+//     return {
+//       valid: false,
+//         message: "At least 2 users are required to create a group",
+//     };
+//     }
+
+//   const adminIdInt = parseUserId(adminId);
+//     const userIdsInt = parseUserIds(parsedUserIds);
+
+//   if (!adminIdInt || userIdsInt.length !== parsedUserIds.length) {
+//     return { valid: false, message: "Invalid user IDs provided!" };
+//   }
+
+//   return { valid: true, adminIdInt, userIdsInt };
+// };
+
+// const createGroupMembers = (adminId: number, userIds: number[]) => {
+//   return [
+//     { userId: adminId, isAdmin: true },
+//     ...userIds.map((userId) => ({ userId, isAdmin: false })),
+//   ];
+// };
+
+// const createGroupConversation = async (
+//   prisma,
+//   name,
+//   avatar,
+//   adminId,
+//   userIds
+// ) => {
+//   return await prisma.conversation.create({
+//       data: {
+//         name: name || null,
+//         isGroup: true,
+//         avatar: avatar || null,
+//       adminId,
+//         members: {
+//         create: createGroupMembers(adminId, userIds),
+//         },
+//       },
+//       include: {
+//         members: {
+//           include: {
+//             user: {
+//               select: {
+//                 id: true,
+//                 name: true,
+//                 email: true,
+//                 avatar: true,
+//               },
+//             },
+//           },
+//         },
+//         messages: {
+//         take: 0,
+//         },
+//       },
+//     });
+// };
+
+// export const createGroupChat = async (request: any, reply: any) => {
+//   try {
+//     const { name, userIds, adminId } = request.body;
+//     const prisma = request.server.prisma;
+
+//     const avatarFile = (request.file as any) || null;
+//     const avatar = avatarFile?.filename || null;
+
+//     const validation = validateCreateGroupRequest(userIds, adminId);
+//     if (!validation.valid) {
+//       return sendErrorResponse(reply, 400, validation.message as string);
+//     }
+
+//     const { adminIdInt, userIdsInt } = validation as {
+//       adminIdInt: number;
+//       userIdsInt: number[];
+//     };
+
+//     const allUserIds = [...userIdsInt, adminIdInt];
+//     const usersExist = await verifyUsersExist(prisma, allUserIds);
+//     if (!usersExist) {
+//       return sendErrorResponse(reply, 404, "Some users not found");
+//     }
+
+//     const conversation = await createGroupConversation(
+//       prisma,
+//       name,
+//       avatar,
+//       adminIdInt,
+//       userIdsInt
+//     );
+
+//     const formattedConversation = formatConversationResponse(
+//       conversation,
+//       adminIdInt
+//     );
+//     return sendSuccessResponse(
+//       reply,
+//       "Group chat created successfully",
+//       formattedConversation,
+//       201
+//     );
+//   } catch (error: any) {
+//     request.log.error(error, "Error creating group chat");
+//     return sendErrorResponse(reply, 500, "Failed to create group chat", error);
+//   }
+// };
+
+//===================================================================================
+//============================TYY MY SELF TO CREATE GROUP============================
+
+export const createGroupChat = async (request, reply) => {
+  try {
+    const { name, userIds, adminId } = request.body;
+    const prisma = request.server.prisma;
+
+    // Parse userIds first
+    const userIdArray = JSON.parse(userIds);
+
+    const missingField = ["userIds", "adminId"].find(
+      (field) => !request.body[field]
+    );
+
+    console.log(typeof userIds); // This will show "string"
+
+    // Use userIdArray instead of userIds here
+    userIdArray.map((id) => {
+      console.log(id);
+    });
+
+    if (missingField) {
+      return reply.status(400).send({
+        success: false,
+        message: `${missingField} is required!`,
+      });
     }
 
-  return [];
-};
-
-const validateCreateGroupRequest = (userIds: any, adminId: any) => {
-  if (!userIds || !adminId) {
-    return { valid: false, message: "userIds and adminId are required!" };
-  }
-
-  const parsedUserIds = parseUserIdsFromRequest(userIds);
-    if (!Array.isArray(parsedUserIds) || parsedUserIds.length < 2) {
-    return {
-      valid: false,
-        message: "At least 2 users are required to create a group",
+    const parseUserIds = (userIds) => {
+      return userIdArray.map((id) => parseInt(id)).filter((id) => !isNaN(id));
     };
+
+    const userIdsInt = parseUserIds(userIds);
+
+    const parseUserId = (id) => {
+      const parsed = parseInt(id);
+      return isNaN(parsed) ? null : parsed;
+    };
+
+    const adminIdInt = parseUserId(adminId);
+
+    if (!adminIdInt) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid adminId provided!",
+      });
     }
 
-  const adminIdInt = parseUserId(adminId);
-    const userIdsInt = parseUserIds(parsedUserIds);
+    // Remove redundant checks
+    if (!userIdsInt.length) {
+      return reply.status(400).send({
+        success: false,
+        message: "userIds must be a non-empty array",
+      });
+    }
 
-  if (!adminIdInt || userIdsInt.length !== parsedUserIds.length) {
-    return { valid: false, message: "Invalid user IDs provided!" };
-  }
+    const allUserIds = [...userIdsInt, adminIdInt];
 
-  return { valid: true, adminIdInt, userIdsInt };
-};
+    // Verify users exist
+    const usersExist = await prisma.user.findMany({
+      where: {
+        id: { in: allUserIds },
+      },
+    });
 
-const createGroupMembers = (adminId: number, userIds: number[]) => {
-  return [
-    { userId: adminId, isAdmin: true },
-    ...userIds.map((userId) => ({ userId, isAdmin: false })),
-  ];
-};
+    if (usersExist.length !== allUserIds.length) {
+      return reply.status(404).send({
+        success: false,
+        message: "Some users not found",
+      });
+    }
 
-const createGroupConversation = async (
-  prisma,
-  name,
-  avatar,
-  adminId,
-  userIds
-) => {
-  return await prisma.conversation.create({
+    // avatar?
+    const avatar = request.file?.filename || null;
+
+    const conversation = await prisma.conversation.create({
       data: {
-        name: name || null,
-        isGroup: true,
-        avatar: avatar || null,
-      adminId,
+        name: name,
+        avatar: avatar,
+        adminId: adminIdInt,
+        isGroup: true, // Don't forget to set this to true for group chats
         members: {
-        create: createGroupMembers(adminId, userIds),
+          create: allUserIds.map((id) => ({
+            userId: id,
+            isAdmin: id === adminIdInt, // Set admin status
+          })),
         },
       },
       include: {
         members: {
           include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
+            user: true,
           },
-        },
-        messages: {
-        take: 0,
         },
       },
     });
-};
 
-export const createGroupChat = async (request: any, reply: any) => {
-  try {
-    const { name, userIds, adminId } = request.body;
-    const prisma = request.server.prisma;
-
-    const avatarFile = (request.file as any) || null;
-    const avatar = avatarFile?.filename || null;
-
-    const validation = validateCreateGroupRequest(userIds, adminId);
-    if (!validation.valid) {
-      return sendErrorResponse(reply, 400, validation.message as string);
-    }
-
-    const { adminIdInt, userIdsInt } = validation as {
-      adminIdInt: number;
-      userIdsInt: number[];
+    const formattedConversation = {
+      ...conversation,
+      avatar: conversation.avatar
+        ? FileService.avatarUrl(conversation.avatar)
+        : null,
+      members: conversation.members.map((member) => ({
+        ...member,
+        user: member.user
+          ? {
+              ...member.user,
+              avatar: member.user.avatar
+                ? FileService.avatarUrl(member.user.avatar)
+                : null,
+            }
+          : null,
+      })),
     };
 
-    const allUserIds = [...userIdsInt, adminIdInt];
-    const usersExist = await verifyUsersExist(prisma, allUserIds);
-    if (!usersExist) {
-      return sendErrorResponse(reply, 404, "Some users not found");
-    }
-
-    const conversation = await createGroupConversation(
-      prisma,
-      name,
-      avatar,
-      adminIdInt,
-      userIdsInt
-    );
-
-    const formattedConversation = formatConversationResponse(
-      conversation,
-      adminIdInt
-    );
-    return sendSuccessResponse(
-      reply,
-      "Group chat created successfully",
-      formattedConversation,
-      201
-    );
-  } catch (error: any) {
-    request.log.error(error, "Error creating group chat");
-    return sendErrorResponse(reply, 500, "Failed to create group chat", error);
+    return reply.status(201).send({
+      success: true,
+      message: "Group chat created successfully",
+      data: formattedConversation,
+    });
+  } catch (error) {
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to create group chat",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
 
 // ============================================================================
 // UPDATE GROUP PERMISSIONS HELPERS
 // ============================================================================
-
-const validateUpdatePermissionsRequest = (
-  conversationId: any,
-  adminId: any
-) => {
-  if (!conversationId || !adminId) {
-    return {
-      valid: false,
-      message: "conversationId and adminId are required!",
-    };
-  }
-
-  const adminIdInt = parseUserId(adminId);
-  if (!adminIdInt) {
-    return { valid: false, message: "Invalid adminId provided!" };
-  }
-
-  return { valid: true, adminIdInt };
-};
-
-const buildPermissionUpdateData = (
-  allowMemberAdd: any,
-  allowMemberMessage: any,
-  allowEditGroupInfo: any
-) => {
-  const updateData: any = {};
-
-  if (typeof allowMemberAdd === "boolean") {
-    updateData.allowMemberAdd = allowMemberAdd;
-  }
-  if (typeof allowMemberMessage === "boolean") {
-    updateData.allowMemberMessage = allowMemberMessage;
-  }
-  if (typeof allowEditGroupInfo === "boolean") {
-    updateData.allowEditGroupInfo = allowEditGroupInfo;
-  }
-
-  return updateData;
-};
 
 export const updateGroupPermissions = async (request: any, reply: any) => {
   try {
@@ -366,57 +457,75 @@ export const updateGroupPermissions = async (request: any, reply: any) => {
     } = request.body;
     const prisma = request.server.prisma;
 
-    const validation = validateUpdatePermissionsRequest(
-      conversationId,
-      adminId
+    const missingField = ["conversationId", "adminId"].find(
+      (field) => !request.body[field]
     );
-    if (!validation.valid) {
-      return sendErrorResponse(reply, 400, validation.message as string);
+    if (missingField) {
+      return reply.status(400).send({
+        success: false,
+        message: `${missingField} is required!`,
+      });
     }
 
-    const { adminIdInt } = validation as { adminIdInt: number };
+    ["allowMemberAdd", "allowMemberMessage", "allowEditGroupInfo"].forEach(
+      (field) => {
+        if (typeof request.body[field] !== "boolean") {
+          return reply.status(400).send({
+            success: false,
+            message: `${field} must be a boolean`,
+          });
+        }
+      }
+    );
 
-    const conversation = await verifyGroupExists(prisma, conversationId);
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, isGroup: true },
+    });
+
     if (!conversation) {
-      return sendErrorResponse(reply, 404, "Group not found");
+      return reply.status(404).send({
+        success: false,
+        message: "Conversation not found",
+      });
     }
 
-    const isAdmin = await verifyGroupAdmin(prisma, conversationId, adminIdInt);
+    const isAdmin = await prisma.conversationMember.findFirst({
+      where: {
+        conversationId: conversationId,
+        userId: parseInt(adminId),
+        isAdmin: true,
+      },
+    });
+    console.log(isAdmin);
     if (!isAdmin) {
-      return sendErrorResponse(
-        reply,
-        403,
-        "Only group admin can update permissions"
-      );
-    }
-
-    const updateData = buildPermissionUpdateData(
-      allowMemberAdd,
-      allowMemberMessage,
-      allowEditGroupInfo
-    );
-
-    if (Object.keys(updateData).length === 0) {
-      return sendErrorResponse(
-        reply,
-        400,
-        "At least one permission field must be provided"
-      );
+      return reply.status(403).send({
+        success: false,
+        message: "Only group admin can update permissions",
+      });
     }
 
     const updatedConversation = await prisma.conversation.update({
       where: { id: conversationId },
-      data: updateData,
+      data: {
+        allowMemberAdd: allowMemberAdd || conversation.allowMemberAdd,
+        allowMemberMessage:
+          allowMemberMessage || conversation.allowMemberMessage,
+        allowEditGroupInfo:
+          allowEditGroupInfo || conversation.allowEditGroupInfo,
+      },
     });
 
-    return sendSuccessResponse(
-      reply,
-      "Permissions updated successfully",
-      updatedConversation
-    );
-  } catch (error: any) {
-    request.log.error(error, "Error updating group permissions");
-    return sendErrorResponse(reply, 500, "Failed to update permissions", error);
+    return reply.status(200).send({
+      success: true,
+      message: "Permissions updated successfully",
+      data: updatedConversation,
+    });
+  } catch (error) {
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to update group permissions",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
 
@@ -429,19 +538,19 @@ const validateAddUsersRequest = (
   userIds: any,
   adminId: any
 ) => {
-    if (!conversationId || !userIds || !adminId) {
+  if (!conversationId || !userIds || !adminId) {
     return {
       valid: false,
-        message: "conversationId, userIds, and adminId are required!",
+      message: "conversationId, userIds, and adminId are required!",
     };
-    }
+  }
 
-    if (!Array.isArray(userIds) || userIds.length === 0) {
+  if (!Array.isArray(userIds) || userIds.length === 0) {
     return { valid: false, message: "userIds must be a non-empty array" };
-    }
+  }
 
   const adminIdInt = parseUserId(adminId);
-    const userIdsInt = parseUserIds(userIds);
+  const userIdsInt = parseUserIds(userIds);
 
   if (!adminIdInt || userIdsInt.length !== userIds.length) {
     return { valid: false, message: "Invalid user IDs provided!" };
@@ -583,7 +692,6 @@ const emitUsersAddedToGroup = (
   });
 };
 
-
 /*
                 {
                     "id": "cmhsnblo70004kgd8yq6xnp6m",
@@ -601,107 +709,330 @@ const emitUsersAddedToGroup = (
 
                     //send emit to new 
 */
+//when i add uer i need to send socket full convercation data with members
+
+// export const addUsersToGroup = async (request: any, reply: any) => {
+//   try {
+//     const { userIds, adminId } = request.body;
+//     const { conversationId } = request.params;
+//     const prisma = request.server.prisma;
+
+//     const validation = validateAddUsersRequest(
+//       conversationId,
+//       userIds,
+//       adminId
+//     );
+//     if (!validation.valid) {
+//       return sendErrorResponse(reply, 400, validation.message as string);
+//     }
+
+//     const { adminIdInt, userIdsInt } = validation as {
+//       adminIdInt: number;
+//       userIdsInt: number[];
+//     };
+
+//     const conversation = await verifyGroupExists(prisma, conversationId);
+//     if (!conversation) {
+//       return sendErrorResponse(reply, 404, "Group not found");
+//     }
+
+//     const userMember = await verifyGroupMember(
+//       prisma,
+//       conversationId,
+//       adminIdInt
+//     );
+//     if (!userMember) {
+//       return sendErrorResponse(
+//         reply,
+//         403,
+//         "You are not a member of this group"
+//       );
+//     }
+
+//     const canAddMembers = checkUserCanAddMembers(
+//       userMember.isAdmin,
+//       conversation.allowMemberAdd
+//     );
+//     if (!canAddMembers) {
+//       return sendErrorResponse(
+//         reply,
+//         403,
+//         "You don't have permission to add users"
+//       );
+//     }
+
+//     const usersExist = await verifyUsersExist(prisma, userIdsInt);
+//     if (!usersExist) {
+//       return sendErrorResponse(reply, 404, "Some users not found");
+//     }
+
+//     const checkResult = await checkUsersAlreadyInGroup(
+//       prisma,
+//       conversationId,
+//       userIdsInt
+//     );
+//     if (checkResult.alreadyInGroup) {
+//       return sendErrorResponse(
+//         reply,
+//         400,
+//         `Users already in group: ${checkResult.userIds.join(", ")}`
+//       );
+//     }
+
+//     await addUsersToGroupMembers(prisma, conversationId, userIdsInt);
+
+//     const addedMembersRaw = await fetchMembersWithUsers(
+//       prisma,
+//       conversationId,
+//       userIdsInt
+//     );
+//     const addedUsers = formatMembers(addedMembersRaw);
+//     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
+
+//     setImmediate(() => {
+//       try {
+//         emitUsersAddedToGroup(
+//           request.server.io,
+//           conversationId,
+//           addedUsers,
+//           allMemberIds
+//         );
+//       } catch (error) {
+//         request.log.error(error, "Error emitting socket event");
+//       }
+//     });
+
+//     return sendSuccessResponse(reply, "Users added successfully", {
+//       conversationId,
+//       members: addedUsers,
+//     });
+//   } catch (error: any) {
+//     request.log.error(error, "Error adding users to group");
+//     return sendErrorResponse(reply, 500, "Failed to add users", error);
+//   }
+// };
+
+//===================================================================================
+//============================TYY MY SELF TO ADD USERS TO GROUP============================
 
 export const addUsersToGroup = async (request: any, reply: any) => {
-  try {
-    const { userIds, adminId } = request.body;
-    const { conversationId } = request.params;
-    const prisma = request.server.prisma;
+  //targated response format
+  //   {
+  //     "success": true,
+  //     "message": "Users added successfully",
+  //     "data": {
+  //         "conversationId": "cmhsnblo70001kgd8f83zoqmp",
+  //         "members": [
+  //             {
+  //                 "id": "cmhswsupd0000kga0oeri8b85",
+  //                 "userId": 5,
+  //                 "conversationId": "cmhsnblo70001kgd8f83zoqmp",
+  //                 "isAdmin": false,
+  //                 "isDeleted": false,
+  //                 "deletedAt": null,
+  //                 "user": {
+  //                     "id": 5,
+  //                     "name": "Sheikh Mohammad Yeasin Miah",
+  //                     "email": "sheikhyeasin786@gmail.com",
+  //                     "avatar": "https://deficall.defilinkteam.org/sys/stores/175376654163.jpg"
+  //                 }
+  //             },
+  //             {
+  //                 "id": "cmhswsupd0001kga0h9f7k0t4",
+  //                 "userId": 6,
+  //                 "conversationId": "cmhsnblo70001kgd8f83zoqmp",
+  //                 "isAdmin": false,
+  //                 "isDeleted": false,
+  //                 "deletedAt": null,
+  //                 "user": {
+  //                     "id": 6,
+  //                     "name": "Mohiuddin",
+  //                     "email": "mohiuddin0mollah@gmail.com",
+  //                     "avatar": "https://deficall.defilinkteam.org/sys/stores/"
+  //                 }
+  //             }
+  //         ]
+  //     }
+  // }
 
-    const validation = validateAddUsersRequest(
-      conversationId,
-      userIds,
-      adminId
-    );
-    if (!validation.valid) {
-      return sendErrorResponse(reply, 400, validation.message as string);
-    }
+  // check if admin can add members we have some parmitions here
+  // allowMemberAdd     Boolean @default(false)
+  // allowMemberMessage Boolean @default(true)
+  // allowEditGroupInfo Boolean @default(false)
 
-    const { adminIdInt, userIdsInt } = validation as {
-      adminIdInt: number;
-      userIdsInt: number[];
-    };
-
-    const conversation = await verifyGroupExists(prisma, conversationId);
-    if (!conversation) {
-      return sendErrorResponse(reply, 404, "Group not found");
-    }
-
-    const userMember = await verifyGroupMember(
-      prisma,
-      conversationId,
-      adminIdInt
-    );
-    if (!userMember) {
-      return sendErrorResponse(
-        reply,
-        403,
-        "You are not a member of this group"
-      );
-    }
-
-    const canAddMembers = checkUserCanAddMembers(
-      userMember.isAdmin,
-      conversation.allowMemberAdd
-    );
-    if (!canAddMembers) {
-      return sendErrorResponse(
-        reply,
-        403,
-        "You don't have permission to add users"
-      );
-    }
-
-    const usersExist = await verifyUsersExist(prisma, userIdsInt);
-    if (!usersExist) {
-      return sendErrorResponse(reply, 404, "Some users not found");
-    }
-
-    const checkResult = await checkUsersAlreadyInGroup(
-      prisma,
-      conversationId,
-      userIdsInt
-    );
-    if (checkResult.alreadyInGroup) {
-      return sendErrorResponse(
-        reply,
-        400,
-        `Users already in group: ${checkResult.userIds.join(", ")}`
-      );
-    }
-
-    await addUsersToGroupMembers(prisma, conversationId, userIdsInt);
-
-    const addedMembersRaw = await fetchMembersWithUsers(
-      prisma,
-      conversationId,
-      userIdsInt
-    );
-    const addedUsers = formatMembers(addedMembersRaw);
-    const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
-
-    setImmediate(() => {
-      try {
-        emitUsersAddedToGroup(
-          request.server.io,
-          conversationId,
-          addedUsers,
-          allMemberIds
-        );
-      } catch (error) {
-        request.log.error(error, "Error emitting socket event");
+  //[5, 6] and "[5,6]" it's also valid body format
+    try {
+      const { userIds, adminId } = request.body;
+      const { conversationId } = request.params;
+      const prisma = request.server.prisma;
+      const io = request.server.io; // Socket.io from plugin
+  
+      // Basic validation
+      if (!userIds || !adminId) {
+        return reply.status(400).send({
+          success: false,
+          message: "userIds and adminId are required!",
+        });
       }
-    });
+  
+      // Parse user IDs (handle both array and string formats)
+      const userIdsArray = Array.isArray(userIds) 
+        ? userIds 
+        : JSON.parse(userIds);
+      
+      const userIdsInt = userIdsArray.map(id => parseInt(id)).filter(id => !isNaN(id));
+      const adminIdInt = parseInt(adminId);
+  
+      if (!userIdsInt.length || !adminIdInt) {
+        return reply.status(400).send({
+          success: false,
+          message: "Invalid user IDs provided!",
+        });
+      }
+  
+      // Check if group exists and get permissions
+      const group = await prisma.conversation.findFirst({
+        where: { 
+          id: conversationId, 
+          isGroup: true 
+        },
+        include: {
+          members: {
+            where: { userId: adminIdInt, isDeleted: false },
+            include: { user: true }
+          }
+        }
+      });
+  
+      if (!group) {
+        return reply.status(404).send({
+          success: false,
+          message: "Group not found",
+        });
+      }
+  
+      // Check if admin is member
+      const adminMember = group.members[0];
+      if (!adminMember) {
+        return reply.status(403).send({
+          success: false,
+          message: "You are not a member of this group",
+        });
+      }
+  
+      // Check permissions
+      if (!group.allowMemberAdd && !adminMember.isAdmin) {
+        return reply.status(403).send({
+          success: false,
+          message: "Only group admin can add members",
+        });
+      }
+  
+      // Check if users already in group
+      const existingMembers = await prisma.conversationMember.findMany({
+        where: {
+          conversationId,
+          userId: { in: userIdsInt },
+          isDeleted: false,
+        },
+      });
+  
+      if (existingMembers.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          message: "Some users are already in the group",
+          data: { existingUserIds: existingMembers.map(m => m.userId) },
+        });
+      }
+  
+      // Add users to group
+      await prisma.conversationMember.createMany({
+        data: userIdsInt.map(userId => ({
+          userId,
+          conversationId,
+          isAdmin: false,
+        })),
+      });
+  
+      const newMembers = await prisma.conversationMember.findMany({
+        where: {
+          conversationId,
+          userId: { in: userIdsInt },
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+            },
+          },
+        },
+      });
+  
+      // Format response
+      const formattedMembers = newMembers.map(member => ({
+        id: member.id,
+        userId: member.userId,
+        conversationId: member.conversationId,
+        isAdmin: member.isAdmin,
+        isDeleted: member.isDeleted,
+        deletedAt: member.deletedAt,
+        user: {
+          id: member.user.id,
+          name: member.user.name,
+          email: member.user.email,
+          avatar: member.user.avatar 
+            ? FileService.avatarUrl(member.user.avatar) 
+            : null,
+        },
+      }));
+  
+      // Get all member IDs for socket notification
+      const allMembers = await prisma.conversationMember.findMany({
+        where: { conversationId, isDeleted: false },
+        select: { userId: true }
+      });
+      const allMemberIds = allMembers.map(m => m.userId).filter(id => id);
+  
+      // Send socket notification to ALL group members
+      const socketData = {
+        success: true,
+        message: "Users added to group",
+        data: {
+          conversationId,
+          members: formattedMembers,
+        },
+      };
+  
+      // Emit to all group members using their personal rooms
+      allMemberIds.forEach(memberId => {
+        io.to(memberId.toString()).emit("users_added_to_group", socketData);
+      });
 
-    return sendSuccessResponse(reply, "Users added successfully", {
-      conversationId,
-      members: addedUsers,
-    });
-  } catch (error: any) {
-    request.log.error(error, "Error adding users to group");
-    return sendErrorResponse(reply, 500, "Failed to add users", error);
-  }
-};
+  
+      // Send success response
+      return reply.status(200).send({
+        success: true,
+        message: "Users added successfully",
+        data: {
+          conversationId,
+          members: formattedMembers,
+        },
+      });
+  
+    } catch (error) {
+      console.error("Error adding users to group:", error);
+      return reply.status(500).send({
+        success: false,
+        message: "Failed to add users to group",
+        error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  };
+//===================================================================================
+//===================================================================================
 
 // ============================================================================
 // REMOVE USERS FROM GROUP HELPERS
@@ -738,17 +1069,17 @@ const checkUsersInGroup = async (
   conversationId: string,
   userIds: number[]
 ) => {
-    const existingMembers = await prisma.conversationMember.findMany({
-      where: {
-        conversationId,
+  const existingMembers = await prisma.conversationMember.findMany({
+    where: {
+      conversationId,
       userId: { in: userIds },
-        isDeleted: false,
-      },
-    });
+      isDeleted: false,
+    },
+  });
 
-      const existingUserIds = existingMembers
-        .map((member) => member.userId)
-        .filter(Boolean);
+  const existingUserIds = existingMembers
+    .map((member) => member.userId)
+    .filter(Boolean);
   const nonExistingUsers = userIds.filter(
     (userId) => !existingUserIds.includes(userId)
   );
@@ -763,7 +1094,7 @@ const removeUsersFromGroupMembers = async (
 ) => {
   await prisma.conversationMember.deleteMany({
     where: {
-        conversationId,
+      conversationId,
       userId: { in: userIds },
     },
   });
@@ -795,7 +1126,7 @@ const emitUsersRemovedFromGroup = (
   allMemberIds: number[]
 ) => {
   const socketData = {
-      success: true,
+    success: true,
     message: "Users removed from group",
     data: {
       conversationId,
@@ -935,13 +1266,13 @@ const checkOtherAdminsExist = async (
   currentUserId: number
 ): Promise<boolean> => {
   const otherAdmins = await prisma.conversationMember.findMany({
-      where: {
-        conversationId,
+    where: {
+      conversationId,
       userId: { not: currentUserId },
       isAdmin: true,
-        isDeleted: false,
-      },
-    });
+      isDeleted: false,
+    },
+  });
 
   return otherAdmins.length > 0;
 };
@@ -982,8 +1313,8 @@ const getLeavingUserInfo = async (prisma: any, userId: number) => {
       name: true,
       email: true,
       avatar: true,
-      },
-    });
+    },
+  });
 
   if (!user) return null;
 
@@ -1002,7 +1333,7 @@ const emitUserLeftGroup = (
   allMemberIds: number[]
 ) => {
   const socketData = {
-      success: true,
+    success: true,
     message: "User left group",
     data: {
       conversationId,
@@ -1067,7 +1398,11 @@ export const leaveFromGroup = async (request: any, reply: any) => {
     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
 
     if (member.isAdmin && conversation.adminId === userIdInt) {
-      const anotherAdminId = await getAnotherAdminId(prisma, conversationId, userIdInt);
+      const anotherAdminId = await getAnotherAdminId(
+        prisma,
+        conversationId,
+        userIdInt
+      );
       if (anotherAdminId) {
         await updateConversationAdminId(prisma, conversationId, anotherAdminId);
       }
@@ -1089,7 +1424,7 @@ export const leaveFromGroup = async (request: any, reply: any) => {
     });
 
     return sendSuccessResponse(reply, "Left group successfully", {
-        conversationId,
+      conversationId,
       members: leavingMembers,
     });
   } catch (error: any) {
@@ -1107,10 +1442,10 @@ const validateMakeAdminRequest = (
   targetUserId: any,
   adminId: any
 ) => {
-    if (!conversationId || !targetUserId || !adminId) {
+  if (!conversationId || !targetUserId || !adminId) {
     return {
       valid: false,
-        message: "conversationId, targetUserId, and adminId are required!",
+      message: "conversationId, targetUserId, and adminId are required!",
     };
   }
 
@@ -1194,14 +1529,10 @@ export const makeGroupAdmin = async (request: any, reply: any) => {
       [targetUserIdInt]
     );
     const memberAfterUpdate = formatMembers(memberAfterUpdateRaw);
-    return sendSuccessResponse(
-      reply,
-      "User promoted to admin successfully",
-      {
-        conversationId,
-        members: memberAfterUpdate,
-      }
-    );
+    return sendSuccessResponse(reply, "User promoted to admin successfully", {
+      conversationId,
+      members: memberAfterUpdate,
+    });
   } catch (error: any) {
     request.log.error(error, "Error making group admin");
     return sendErrorResponse(reply, 500, "Failed to make group admin", error);
@@ -1217,10 +1548,10 @@ const validateRemoveAdminRequest = (
   targetUserId: any,
   adminId: any
 ) => {
-    if (!conversationId || !targetUserId || !adminId) {
+  if (!conversationId || !targetUserId || !adminId) {
     return {
       valid: false,
-        message: "conversationId, targetUserId, and adminId are required!",
+      message: "conversationId, targetUserId, and adminId are required!",
     };
   }
 
@@ -1299,7 +1630,7 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
 
     const targetMember = await findAdminMember(
       prisma,
-        conversationId,
+      conversationId,
       targetUserIdInt
     );
     if (!targetMember) {
@@ -1314,14 +1645,10 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
       [targetUserIdInt]
     );
     const memberAfterUpdate = formatMembers(memberAfterUpdateRaw);
-    return sendSuccessResponse(
-      reply,
-      "Admin rights removed successfully",
-      {
-        conversationId,
-        members: memberAfterUpdate,
-      }
-    );
+    return sendSuccessResponse(reply, "Admin rights removed successfully", {
+      conversationId,
+      members: memberAfterUpdate,
+    });
   } catch (error: any) {
     request.log.error(error, "Error removing group admin");
     return sendErrorResponse(reply, 500, "Failed to remove group admin", error);
@@ -1333,10 +1660,10 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
 // ============================================================================
 
 const validateDestroyGroupRequest = (conversationId: any, adminId: any) => {
-    if (!conversationId || !adminId) {
+  if (!conversationId || !adminId) {
     return {
       valid: false,
-        message: "conversationId and adminId are required!",
+      message: "conversationId and adminId are required!",
     };
   }
 
@@ -1349,14 +1676,14 @@ const validateDestroyGroupRequest = (conversationId: any, adminId: any) => {
 };
 
 const deleteGroupAndMembers = async (prisma: any, conversationId: string) => {
-    await prisma.$transaction([
-      prisma.conversationMember.deleteMany({
-        where: { conversationId },
-      }),
-      prisma.conversation.delete({
-        where: { id: conversationId },
-      }),
-    ]);
+  await prisma.$transaction([
+    prisma.conversationMember.deleteMany({
+      where: { conversationId },
+    }),
+    prisma.conversation.delete({
+      where: { id: conversationId },
+    }),
+  ]);
 };
 
 export const destroyGroup = async (request: any, reply: any) => {
@@ -1389,7 +1716,7 @@ export const destroyGroup = async (request: any, reply: any) => {
     await deleteGroupAndMembers(prisma, conversationId);
 
     return sendSuccessResponse(reply, "Group destroyed successfully", {
-        conversationId,
+      conversationId,
     });
   } catch (error: any) {
     request.log.error(error, "Error destroying group");

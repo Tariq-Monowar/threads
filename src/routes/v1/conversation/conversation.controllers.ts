@@ -253,3 +253,184 @@ export const getMyConversationsList = async (request, reply) => {
     });
   }
 };
+
+export const getSingleConversation = async (request, reply) => {
+  try {
+    const { conversationId } = request.params;
+    const { myId } = request.query;
+    const { message = 50 } = request.query;
+    const prisma = request.server.prisma;
+
+    // Validate conversationId
+    if (!conversationId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId is required!",
+      });
+    }
+
+    // Validate and parse user ID
+    if (!myId) {
+      return reply.status(400).send({
+        success: false,
+        message: "myId is required!",
+      });
+    }
+
+    const currentUserId = parseInt(myId);
+    if (isNaN(currentUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID provided!",
+      });
+    }
+
+    // Check if user is a member of the conversation
+    const member = await prisma.conversationMember.findFirst({
+      where: {
+        conversationId,
+        userId: currentUserId,
+        isDeleted: false,
+      },
+    });
+
+    if (!member) {
+      return reply.status(403).send({
+        success: false,
+        message: "You don't have access to this conversation",
+      });
+    }
+
+    // Parse message limit from query
+    const messageLimit = Math.min(
+      Math.max(parseInt(request.query?.message) || 50, 1),
+      100
+    );
+
+    // Fetch the conversation with members and messages
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        members: {
+          where: { isDeleted: false },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+          },
+        },
+        messages: {
+          where: {
+            NOT: { deletedForUsers: { has: currentUserId } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: parseInt(message),
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+            MessageFile: true,
+          },
+        },
+      },
+    });
+
+    if (!conversation) {
+      return reply.status(404).send({
+        success: false,
+        message: "Conversation not found",
+      });
+    }
+
+    // Helper: Format user with avatar URL
+    const formatUserWithAvatar = (user) => {
+      if (!user) return null;
+      return {
+        ...user,
+        avatar: user.avatar ? FileService.avatarUrl(user.avatar) : null,
+      };
+    };
+
+    // Helper: Process and filter conversation members
+    const processConversationMembers = (members, isGroup, currentUserId) => {
+      const formattedMembers = members.map((member) => ({
+        ...member,
+        user: formatUserWithAvatar(member.user),
+      }));
+
+      // For private conversations, exclude current user
+      if (!isGroup) {
+        return formattedMembers.filter(
+          (member) => member.userId !== currentUserId
+        );
+      }
+
+      // For group conversations, return all members (not limited like in list)
+      return formattedMembers;
+    };
+
+    // Helper: Get participant user IDs from conversation members
+    const getParticipantIds = (members: any[]): number[] => {
+      return members
+        .map((member) => member.userId)
+        .filter((id): id is number => typeof id === "number");
+    };
+
+    // Helper: Count unread messages
+    const countUnreadMessages = async (prisma, conversationId, currentUserId) => {
+      const unreadCount = await prisma.message.count({
+        where: {
+          conversationId,
+          userId: { not: currentUserId },
+          NOT: { deletedForUsers: { has: currentUserId } },
+        },
+      });
+      return unreadCount;
+    };
+
+    // Get participant IDs and unread count
+    const participantIds = getParticipantIds(conversation.members);
+    const unreadCount = await countUnreadMessages(
+      prisma,
+      conversationId,
+      currentUserId
+    );
+
+    // Transform the conversation
+    const transformedConversation = {
+      ...conversation,
+      members: processConversationMembers(
+        conversation.members,
+        conversation.isGroup,
+        currentUserId
+      ),
+      messages: conversation.messages
+        .reverse() // Reverse to show oldest first
+        .map((message: any) => transformMessage(message, participantIds)),
+      avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
+      unreadCount,
+    };
+
+    return reply.send({
+      success: true,
+      data: transformedConversation,
+    });
+  } catch (error) {
+    request.log.error(error, "Error getting single conversation");
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to get conversation",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

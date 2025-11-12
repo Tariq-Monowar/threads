@@ -307,43 +307,34 @@ export const getSingleConversation = async (request, reply) => {
       100
     );
 
-    // Fetch the conversation with members and messages
-    const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      include: {
-        members: {
-          where: { isDeleted: false },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-          },
-        },
-        messages: {
-          where: {
-            NOT: { deletedForUsers: { has: currentUserId } },
-          },
-          orderBy: { createdAt: "desc" },
-          take: parseInt(message),
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-            MessageFile: true,
+  // ── FETCH CONVERSATION ───────────────────────────────────────────────
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      members: {
+        where: { isDeleted: false },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatar: true },
           },
         },
       },
-    });
+      messages: {
+        where: {
+          NOT: { deletedForUsers: { has: currentUserId } },
+        },
+        // ── ASCENDING ORDER (oldest first) ────────────────────────
+        orderBy: { createdAt: "asc" },
+        take: messageLimit,               // use the clamped limit
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatar: true },
+          },
+          MessageFile: true,
+        },
+      },
+    },
+  });
 
     if (!conversation) {
       return reply.status(404).send({

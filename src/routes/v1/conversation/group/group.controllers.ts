@@ -426,6 +426,7 @@ export const createGroupChat = async (request, reply) => {
             }
           : null,
       })),
+      message: []
     };
 
     return reply.status(201).send({

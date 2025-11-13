@@ -95,6 +95,9 @@ model Message {
   //relations
   MessageFile MessageFile[]
 
+  // System message - for group chat created/deleted/etc.
+  isSystemMessage Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -1,6 +1,6 @@
 import { FileService } from "../../../../utils/fileService";
 import { transformMessage } from "../../../../utils/message.utils";
-import { getImageUrl } from "../../../../utils/baseurl";
+import { baseUrl, getImageUrl } from "../../../../utils/baseurl";
 
 // ============================================================================
 // SHARED HELPERS
@@ -412,9 +412,7 @@ export const createGroupChat = async (request, reply) => {
 
     const formattedConversation = {
       ...conversation,
-      avatar: conversation.avatar
-        ? FileService.avatarUrl(conversation.avatar)
-        : null,
+      avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
       members: conversation.members.map((member) => ({
         ...member,
         user: member.user
@@ -426,8 +424,39 @@ export const createGroupChat = async (request, reply) => {
             }
           : null,
       })),
-      messages: []
+      messages: [],
     };
+
+    //socket event to all group members
+    setImmediate(() => {
+      try {
+        const creatorId = adminIdInt;
+
+        if (!creatorId) {
+          request.log.warn("Creator ID not found in request.user");
+          return;
+        }
+
+        const recipientIds = conversation.members
+          .filter((member) => member.userId !== creatorId)
+          .map((member) => member.userId.toString());
+
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("group_created", {
+            success: true,
+            message: "Group chat created successfully",
+            data: formattedConversation,
+          });
+          console.log(recipientIds);
+          console.log(formattedConversation);
+        }
+
+        // if need to send to creator
+        // request.server.io.to(creatorId.toString()).emit("group_created", { conversation: formattedConversation });
+      } catch (error) {
+        request.log.error(error, "Error emitting group_created event");
+      }
+    });
 
     return reply.status(201).send({
       success: true,
@@ -508,12 +537,61 @@ export const updateGroupPermissions = async (request: any, reply: any) => {
     const updatedConversation = await prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        allowMemberAdd: allowMemberAdd || conversation.allowMemberAdd,
+        allowMemberAdd:
+          allowMemberAdd !== undefined
+            ? allowMemberAdd
+            : conversation.allowMemberAdd,
         allowMemberMessage:
-          allowMemberMessage || conversation.allowMemberMessage,
+          allowMemberMessage !== undefined
+            ? allowMemberMessage
+            : conversation.allowMemberMessage,
         allowEditGroupInfo:
-          allowEditGroupInfo || conversation.allowEditGroupInfo,
+          allowEditGroupInfo !== undefined
+            ? allowEditGroupInfo
+            : conversation.allowEditGroupInfo,
       },
+    });
+
+    // Fetch members for socket event
+    const members = await prisma.conversationMember.findMany({
+      where: {
+        conversationId: conversationId,
+        isDeleted: false,
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    //socket event to all group members
+    setImmediate(() => {
+      try {
+        const recipientIds = members
+          .filter(
+            (member) =>
+              member.userId !== null && member.userId !== parseInt(adminId)
+          )
+          .map((member) => member.userId!.toString());
+
+        const socketData = {
+          success: true,
+          message: "Group permissions updated successfully",
+          data: updatedConversation,
+        };
+
+        if (recipientIds.length > 0) {
+          request.server.io
+            .to(recipientIds)
+            .emit("group_permissions_updated", socketData);
+          console.log("recipientIds", recipientIds);
+          console.log("updatedConversation", socketData);
+        }
+      } catch (error) {
+        request.log.error(
+          error,
+          "Error emitting group_permissions_updated event"
+        );
+      }
     });
 
     return reply.status(200).send({
@@ -653,176 +731,204 @@ export const addUsersToGroup = async (request: any, reply: any) => {
   // allowEditGroupInfo Boolean @default(false)
 
   //[5, 6] and "[5,6]" it's also valid body format
-    try {
-      const { userIds, adminId } = request.body;
-      const { conversationId } = request.params;
-      const prisma = request.server.prisma;
-      const io = request.server.io; // Socket.io from plugin
-  
-      // Basic validation
-      if (!userIds || !adminId) {
-        return reply.status(400).send({
-          success: false,
-          message: "userIds and adminId are required!",
-        });
-      }
-  
-      // Parse user IDs (handle both array and string formats)
-      const userIdsArray = Array.isArray(userIds) 
-        ? userIds 
-        : JSON.parse(userIds);
-      
-      const userIdsInt = userIdsArray.map(id => parseInt(id)).filter(id => !isNaN(id));
-      const adminIdInt = parseInt(adminId);
-  
-      if (!userIdsInt.length || !adminIdInt) {
-        return reply.status(400).send({
-          success: false,
-          message: "Invalid user IDs provided!",
-        });
-      }
-  
-      // Check if group exists and get permissions
-      const group = await prisma.conversation.findFirst({
-        where: { 
-          id: conversationId, 
-          isGroup: true 
-        },
-        include: {
-          members: {
-            where: { userId: adminIdInt, isDeleted: false },
-            include: { user: true }
-          }
-        }
-      });
-  
-      if (!group) {
-        return reply.status(404).send({
-          success: false,
-          message: "Group not found",
-        });
-      }
-  
-      // Check if admin is member
-      const adminMember = group.members[0];
-      if (!adminMember) {
-        return reply.status(403).send({
-          success: false,
-          message: "You are not a member of this group",
-        });
-      }
-  
-      // Check permissions
-      if (!group.allowMemberAdd && !adminMember.isAdmin) {
-        return reply.status(403).send({
-          success: false,
-          message: "Only group admin can add members",
-        });
-      }
-  
-      // Check if users already in group
-      const existingMembers = await prisma.conversationMember.findMany({
-        where: {
-          conversationId,
-          userId: { in: userIdsInt },
-          isDeleted: false,
-        },
-      });
-  
-      if (existingMembers.length > 0) {
-        return reply.status(400).send({
-          success: false,
-          message: "Some users are already in the group",
-          data: { existingUserIds: existingMembers.map(m => m.userId) },
-        });
-      }
-  
-      // Add users to group
-      await prisma.conversationMember.createMany({
-        data: userIdsInt.map(userId => ({
-          userId,
-          conversationId,
-          isAdmin: false,
-        })),
-      });
-  
-      const newMembers = await prisma.conversationMember.findMany({
-        where: {
-          conversationId,
-          userId: { in: userIdsInt },
-        },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatar: true,
-            },
-          },
-        },
-      });
-  
-      // Format response
-      const formattedMembers = newMembers.map(member => ({
-        id: member.id,
-        userId: member.userId,
-        conversationId: member.conversationId,
-        isAdmin: member.isAdmin,
-        isDeleted: member.isDeleted,
-        deletedAt: member.deletedAt,
-        user: {
-          id: member.user.id,
-          name: member.user.name,
-          email: member.user.email,
-          avatar: member.user.avatar 
-            ? FileService.avatarUrl(member.user.avatar) 
-            : null,
-        },
-      }));
-  
-      // Get all member IDs for socket notification
-      const allMembers = await prisma.conversationMember.findMany({
-        where: { conversationId, isDeleted: false },
-        select: { userId: true }
-      });
-      const allMemberIds = allMembers.map(m => m.userId).filter(id => id);
-  
-      // Send socket notification to ALL group members
-      const socketData = {
-        success: true,
-        message: "Users added to group",
-        data: {
-          conversationId,
-          members: formattedMembers,
-        },
-      };
-  
-      // Emit to all group members using their personal rooms
-      allMemberIds.forEach(memberId => {
-        io.to(memberId.toString()).emit("users_added_to_group", socketData);
-      });
+  try {
+    const { userIds, adminId } = request.body;
+    const { conversationId } = request.params;
+    const prisma = request.server.prisma;
+    const io = request.server.io; // Socket.io from plugin
 
-  
-      // Send success response
-      return reply.status(200).send({
-        success: true,
-        message: "Users added successfully",
-        data: {
-          conversationId,
-          members: formattedMembers,
-        },
-      });
-  
-    } catch (error) {
-      console.error("Error adding users to group:", error);
-      return reply.status(500).send({
+    // Basic validation
+    if (!userIds || !adminId) {
+      return reply.status(400).send({
         success: false,
-        message: "Failed to add users to group",
-        error: process.env.NODE_ENV === "development" ? error.message : undefined,
+        message: "userIds and adminId are required!",
       });
     }
-  };
+
+    // Parse user IDs (handle both array and string formats)
+    const userIdsArray = Array.isArray(userIds) ? userIds : JSON.parse(userIds);
+
+    const userIdsInt = userIdsArray
+      .map((id) => parseInt(id))
+      .filter((id) => !isNaN(id));
+    const adminIdInt = parseInt(adminId);
+
+    if (!userIdsInt.length || !adminIdInt) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user IDs provided!",
+      });
+    }
+
+    // Check if group exists and get permissions
+    const group = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        isGroup: true,
+      },
+      include: {
+        members: {
+          where: { userId: adminIdInt, isDeleted: false },
+          include: { user: true },
+        },
+      },
+    });
+
+    if (!group) {
+      return reply.status(404).send({
+        success: false,
+        message: "Group not found",
+      });
+    }
+
+    // Check if admin is member
+    const adminMember = group.members[0];
+    if (!adminMember) {
+      return reply.status(403).send({
+        success: false,
+        message: "You are not a member of this group",
+      });
+    }
+
+    // Check permissions
+    if (!group.allowMemberAdd && !adminMember.isAdmin) {
+      return reply.status(403).send({
+        success: false,
+        message: "Only group admin can add members",
+      });
+    }
+
+    // Check if users already in group
+    const existingMembers = await prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { in: userIdsInt },
+        isDeleted: false,
+      },
+    });
+
+    if (existingMembers.length > 0) {
+      return reply.status(400).send({
+        success: false,
+        message: "Some users are already in the group",
+        data: { existingUserIds: existingMembers.map((m) => m.userId) },
+      });
+    }
+
+    // Add users to group
+    await prisma.conversationMember.createMany({
+      data: userIdsInt.map((userId) => ({
+        userId,
+        conversationId,
+        isAdmin: false,
+      })),
+    });
+
+    const newMembers = await prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { in: userIdsInt },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    // Format response
+    const formattedMembers = newMembers.map((member) => ({
+      id: member.id,
+      userId: member.userId,
+      conversationId: member.conversationId,
+      isAdmin: member.isAdmin,
+      isDeleted: member.isDeleted,
+      deletedAt: member.deletedAt,
+
+      user: {
+        id: member.user.id,
+        name: member.user.name,
+        email: member.user.email,
+        avatar: member.user.avatar
+          ? FileService.avatarUrl(member.user.avatar)
+          : null,
+      },
+    }));
+
+    // Get all member IDs for socket notification
+    const allMembers = await prisma.conversationMember.findMany({
+      where: { conversationId, isDeleted: false },
+      select: { userId: true },
+    });
+    const allMemberIds = allMembers.map((m) => m.userId).filter((id) => id);
+
+    // Send socket notification to ALL group members
+    // const socketData = {
+    //   success: true,
+    //   message: "Users added to group",
+    //   data: {
+    //     conversationId,
+    //     members: formattedMembers,
+    //   },
+    // };
+
+    // // Emit to all group members using their personal rooms
+    // allMemberIds.forEach((memberId) => {
+    //   io.to(memberId.toString()).emit("users_added_to_group", socketData);
+    // });
+
+    //socket event to all group members
+    setImmediate(() => {
+      try {
+        const recipientIds = allMemberIds
+          .filter((memberId) => memberId !== parseInt(adminId))
+          .map((memberId) => memberId.toString());
+
+        const data = {
+          success: true,
+          message: "Users added to group",
+          data: {
+            members: formattedMembers,
+            conversationId,
+            allowMemberAdd: group.allowMemberAdd,
+            allowMemberMessage: group.allowMemberMessage,
+            allowEditGroupInfo: group.allowEditGroupInfo,
+          },
+        };
+
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("users_added_to_group", data);
+        }
+        console.log("recipientIds", recipientIds);
+        console.log("data", data);
+      } catch (error) {
+        request.log.error(error, "Error emitting users_added_to_group event");
+      }
+    });
+
+    // Send success response
+    return reply.status(200).send({
+      success: true,
+      message: "Users added successfully",
+      data: {
+        conversationId,
+        members: formattedMembers,
+      },
+    });
+  } catch (error) {
+    console.error("Error adding users to group:", error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to add users to group",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
 //===================================================================================
 //===================================================================================
 
@@ -1002,15 +1108,44 @@ export const removeUsersFromGroup = async (request: any, reply: any) => {
     await removeUsersFromGroupMembers(prisma, conversationId, userIdsInt);
 
     setImmediate(() => {
+      // try {
+      //   emitUsersRemovedFromGroup(
+      //     request.server.io,
+      //     conversationId,
+      //     removedUsers,
+      //     allMemberIds
+      //   );
+      // } catch (error) {
+      //   request.log.error(error, "Error emitting socket event");
+      // }
       try {
-        emitUsersRemovedFromGroup(
-          request.server.io,
-          conversationId,
-          removedUsers,
-          allMemberIds
-        );
+        const recipientIds = allMemberIds
+          .filter((memberId) => memberId !== parseInt(adminId))
+          .map((memberId) => memberId.toString());
+
+        const data = {
+          success: true,
+          message: "Users removed from group",
+          data: {
+            conversationId,
+            members: removedUsers,
+            allowMemberAdd: conversation.allowMemberAdd,
+            allowMemberMessage: conversation.allowMemberMessage,
+            allowEditGroupInfo: conversation.allowEditGroupInfo,
+          },
+        };
+
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("users_removed_from_group", data);
+
+          console.log("recipientIds", recipientIds);
+          console.log("data", data);
+        }
       } catch (error) {
-        request.log.error(error, "Error emitting socket event");
+        request.log.error(
+          error,
+          "Error emitting users_removed_from_group event"
+        );
       }
     });
 
@@ -1204,12 +1339,31 @@ export const leaveFromGroup = async (request: any, reply: any) => {
 
     setImmediate(() => {
       try {
-        emitUserLeftGroup(
-          request.server.io,
-          conversationId,
-          leavingMembers,
-          allMemberIds
-        );
+        // emitUserLeftGroup(
+        //   request.server.io,
+        //   conversationId,
+        //   leavingMembers,
+        //   allMemberIds
+        // );
+        const recipientIds = allMemberIds
+          .filter((memberId) => memberId !== parseInt(userId))
+          .map((memberId) => memberId.toString());
+        const data = {
+          success: true,
+          message: "User left group",
+          data: {
+            conversationId,
+            members: leavingMembers,
+            allowMemberAdd: conversation.allowMemberAdd,
+            allowMemberMessage: conversation.allowMemberMessage,
+            allowEditGroupInfo: conversation.allowEditGroupInfo,
+          },
+        };
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("user_left_group", data);
+          console.log("recipientIds", recipientIds);
+          console.log("data", data);
+        }
       } catch (error) {
         request.log.error(error, "Error emitting socket event");
       }
@@ -1654,6 +1808,39 @@ export const updateGroupInfo = async (request: any, reply: any) => {
       fullConversation,
       userIdInt
     );
+
+    setImmediate(() => {
+      try {
+        const recipientIds = conversation.members
+          .filter((member) => member.userId !== userIdInt)
+          .map((member) => member.userId.toString());
+
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("group_info_updated", {
+            success: true,
+            message: "Group info updated successfully",
+            data: {
+              conversationId,
+              members: formattedConversation,
+              allowMemberAdd: conversation.allowMemberAdd,
+              allowMemberMessage: conversation.allowMemberMessage,
+              allowEditGroupInfo: conversation.allowEditGroupInfo,
+            },
+          });
+          console.log("recipientIds", recipientIds);
+          console.log("data", {
+            conversationId,
+            members: formattedConversation,
+            allowMemberAdd: conversation.allowMemberAdd,
+            allowMemberMessage: conversation.allowMemberMessage,
+            allowEditGroupInfo: conversation.allowEditGroupInfo,
+          });
+        }
+      } catch (error) {
+        request.log.error(error, "Error emitting group_info_updated event");
+      }
+    });
+
     return sendSuccessResponse(
       reply,
       "Group info updated successfully",

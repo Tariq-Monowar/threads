@@ -116,7 +116,12 @@ export const sendMessage = async (request, reply) => {
             },
           },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          isGroup: true,
+          name: true,
+          allowMemberMessage: true,
+        },
       });
 
       if (!conversation) {
@@ -169,6 +174,7 @@ export const sendMessage = async (request, reply) => {
           },
           select: {
             userId: true,
+            isAdmin: true,
             user: {
               select: {
                 id: true,
@@ -183,12 +189,20 @@ export const sendMessage = async (request, reply) => {
         }),
       ]);
 
-      return { message, members };
+      return { message, members, conversation };
     });
 
     const participantIds = transactionResult.members
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");
+
+    /*
+    Along with the main data, include the following permission & conversation details in every push message:
+    isGroup
+    isAdmin (for the recipient)
+    isAllowMemberMessage
+    conversationName
+    */
 
     const transformedMessage = transformMessage(
       transactionResult.message,
@@ -201,17 +215,8 @@ export const sendMessage = async (request, reply) => {
       data: transformedMessage,
     };
 
-   
-
     setImmediate(async () => {
       try {
-        const pushData = {
-          type: "new_message",
-          success: "true",
-          message: "Message sent successfully",
-          data: JSON.stringify(transformedMessage),
-        };
-
         const pushPromises: Promise<any>[] = [];
 
         for (const member of transactionResult.members) {
@@ -219,6 +224,21 @@ export const sendMessage = async (request, reply) => {
             continue;
           }
 
+          // Prepare push data with conversation details for this recipient
+          const pushData = {
+            type: "new_message",
+            success: "true",
+            message: "Message sent successfully",
+            data: JSON.stringify({
+              ...transformedMessage,
+              isGroup: transactionResult.conversation.isGroup,
+              isAdmin: member.isAdmin || false,
+              isAllowMemberMessage: transactionResult.conversation.allowMemberMessage,
+              conversationName: transactionResult.conversation.name || null,
+            }),
+          };
+
+          console.log("pushData", pushData);
           // Send socket event (non-blocking)
           if (member.userId) {
             request.server.io
@@ -231,7 +251,7 @@ export const sendMessage = async (request, reply) => {
             const validTokens = fcmTokens.filter((token): token is string =>
               Boolean(token)
             );
-            
+
             // Add all push promises to array for parallel execution
             for (const token of validTokens) {
               pushPromises.push(
@@ -255,9 +275,7 @@ export const sendMessage = async (request, reply) => {
       }
     });
 
-
     reply.status(201).send(response);
-
   } catch (error) {
     try {
       const files = (request.files as any[]) || [];

@@ -441,18 +441,29 @@ export const createGroupChat = async (request, reply) => {
           .filter((member) => member.userId !== creatorId)
           .map((member) => member.userId.toString());
 
-        if (recipientIds.length > 0) {
-          request.server.io.to(recipientIds).emit("group_created", {
-            success: true,
-            message: "Group chat created successfully",
-            data: formattedConversation,
-          });
-          console.log(recipientIds);
-          console.log(formattedConversation);
-        }
 
-        // if need to send to creator
-        // request.server.io.to(creatorId.toString()).emit("group_created", { conversation: formattedConversation });
+          
+      // if (conversationForOtherUser) {
+      //   io.to(otherUserId.toString()).emit("conversation_created", {
+      //     success: true,
+      //     data: {
+      //       ...conversationForOtherUser,
+      //       messages: [],
+      //     },
+      //   });
+      // }
+
+        const data = {
+          success: true,
+          message: "Group chat created successfully",
+          data: formattedConversation,
+        };
+
+        if (recipientIds.length > 0) {
+          request.server.io.to(recipientIds).emit("conversation_created", data);
+          console.log("recipientIds", recipientIds);
+          console.log("data", data);
+        }
       } catch (error) {
         request.log.error(error, "Error emitting group_created event");
       }

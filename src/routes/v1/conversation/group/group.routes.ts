@@ -22,6 +22,7 @@ const groupRoutes = (fastify: FastifyInstance) => {
   fastify.post("/:conversationId/make-admin", makeGroupAdmin);
   fastify.post("/:conversationId/remove-admin", removeGroupAdmin);
   fastify.delete("/:conversationId/destroy", destroyGroup);
+  
 };
 
 export default groupRoutes;

@@ -15,7 +15,6 @@ async function routesV1(fastify: FastifyInstance) {
     { path: "/messages", route: messages },
     { path: "/conversation/groups", route: groupRoutes },
     { path: "/conversation/private", route: privateRoutes },
-
   ];
 
   moduleRoutes.forEach(({ path, route }) => {

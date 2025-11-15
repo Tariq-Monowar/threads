@@ -105,6 +105,18 @@ const formatConversationResponse = (
 const verifyGroupExists = async (prisma: any, conversationId: string) => {
   return await prisma.conversation.findFirst({
     where: { id: conversationId, isGroup: true },
+    select: {
+      id: true,
+      name: true,
+      isGroup: true,
+      avatar: true,
+      adminIds: true,
+      allowMemberAdd: true,
+      allowMemberMessage: true,
+      allowEditGroupInfo: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
 };
 
@@ -392,7 +404,7 @@ export const createGroupChat = async (request, reply) => {
       data: {
         name: name,
         avatar: avatar,
-        adminId: adminIdInt,
+        adminIds: [adminIdInt],
         isGroup: true, // Don't forget to set this to true for group chats
         members: {
           create: allUserIds.map((id) => ({
@@ -1232,14 +1244,14 @@ const getAnotherAdminId = async (
   return otherAdmin?.userId || null;
 };
 
-const updateConversationAdminId = async (
+const updateConversationAdminIds = async (
   prisma: any,
   conversationId: string,
-  newAdminId: number
+  adminIds: number[]
 ) => {
   await prisma.conversation.update({
     where: { id: conversationId },
-    data: { adminId: newAdminId },
+    data: { adminIds },
   });
 };
 
@@ -1335,14 +1347,23 @@ export const leaveFromGroup = async (request: any, reply: any) => {
     const leavingMembers = formatMembers(leavingMemberRaw);
     const allMemberIds = await getAllGroupMemberIds(prisma, conversationId);
 
-    if (member.isAdmin && conversation.adminId === userIdInt) {
+    if (member.isAdmin && conversation.adminIds.includes(userIdInt)) {
       const anotherAdminId = await getAnotherAdminId(
         prisma,
         conversationId,
         userIdInt
       );
       if (anotherAdminId) {
-        await updateConversationAdminId(prisma, conversationId, anotherAdminId);
+        // Get current adminIds and remove the leaving user, ensure anotherAdminId is included
+        const currentAdminIds = conversation.adminIds.filter(id => id !== userIdInt);
+        if (!currentAdminIds.includes(anotherAdminId)) {
+          currentAdminIds.push(anotherAdminId);
+        }
+        await updateConversationAdminIds(prisma, conversationId, currentAdminIds);
+      } else {
+        // Remove the leaving admin from adminIds array
+        const updatedAdminIds = conversation.adminIds.filter(id => id !== userIdInt);
+        await updateConversationAdminIds(prisma, conversationId, updatedAdminIds);
       }
     }
 
@@ -1480,6 +1501,16 @@ export const makeGroupAdmin = async (request: any, reply: any) => {
 
     await addAdminRights(prisma, conversationId, targetMember.id);
 
+    // Update adminIds array to include the new admin
+    if (conversation && !conversation.adminIds.includes(targetUserIdInt)) {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { 
+          adminIds: [...conversation.adminIds, targetUserIdInt]
+        },
+      });
+    }
+
     const memberAfterUpdateRaw = await fetchMembersWithUsers(
       prisma,
       conversationId,
@@ -1595,6 +1626,16 @@ export const removeGroupAdmin = async (request: any, reply: any) => {
     }
 
     await removeAdminRights(prisma, targetMember.id);
+
+    // Update adminIds array to remove the admin
+    if (conversation && conversation.adminIds.includes(targetUserIdInt)) {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { 
+          adminIds: conversation.adminIds.filter(id => id !== targetUserIdInt)
+        },
+      });
+    }
 
     const memberAfterUpdateRaw = await fetchMembersWithUsers(
       prisma,

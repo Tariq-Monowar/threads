@@ -906,7 +906,7 @@ export const addUsersToGroup = async (request: any, reply: any) => {
     // });
 
     //socket event to all group members
-    setImmediate(() => {
+    setImmediate(async () => {
       try {
         const recipientIds = allMemberIds
           .filter((memberId) => memberId !== parseInt(adminId))
@@ -929,6 +929,49 @@ export const addUsersToGroup = async (request: any, reply: any) => {
         }
         console.log("recipientIds", recipientIds);
         console.log("data", data);
+
+        // Emit conversation_created to newly added users
+        for (const newUserId of userIdsInt) {
+          try {
+            const conversationForNewUser = await getGroupConversationWithDetails(
+              prisma,
+              conversationId,
+              newUserId
+            );
+
+            if (conversationForNewUser) {
+              const formattedConversation = formatConversationResponse(
+                conversationForNewUser,
+                newUserId
+              );
+
+              // For conversation_created, we want empty messages array
+              const conversationData = {
+                ...formattedConversation,
+                messages: [],
+              };
+
+              console.log("conversation_created", conversationData);
+
+              request.server.io
+                .to(newUserId.toString())
+                .emit("conversation_created", {
+                  success: true,
+                  data: conversationData,
+                });
+
+              console.log(
+                `conversation_created emitted to user ${newUserId}`,
+                conversationData
+              );
+            }
+          } catch (error) {
+            request.log.error(
+              error,
+              `Error emitting conversation_created to user ${newUserId}`
+            );
+          }
+        }
       } catch (error) {
         request.log.error(error, "Error emitting users_added_to_group event");
       }

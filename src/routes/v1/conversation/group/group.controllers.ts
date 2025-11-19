@@ -1434,10 +1434,14 @@ export const leaveFromGroup = async (request: any, reply: any) => {
             allowEditGroupInfo: conversation.allowEditGroupInfo,
           },
         };
+
+
         if (recipientIds.length > 0) {
-          request.server.io.to(recipientIds).emit("user_left_group", data);
           console.log("recipientIds", recipientIds);
           console.log("data", data);
+          request.server.io.to(recipientIds).emit("user_left_group", data);
+          // console.log("recipientIds", recipientIds);
+          // console.log("data", data);
         }
       } catch (error) {
         request.log.error(error, "Error emitting socket event");

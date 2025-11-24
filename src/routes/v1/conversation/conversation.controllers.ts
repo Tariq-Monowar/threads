@@ -1,427 +1,541 @@
-import { baseUrl, getImageUrl } from "../../../utils/baseurl";
-import { FileService } from "../../../utils/fileService";
-import { transformMessage } from "../../../utils/message.utils";
+import { FastifyRequest, FastifyReply } from "fastify";
+import bcrypt from "bcrypt";
+import {
+  forgotPasswordEmail,
+  otpVerificationEmail,
+  sendForgotPasswordOTP,
+  sendTwoFactorOtp,
+} from "../../../utils/email.config";
+
+import { generateJwtToken } from "../../../utils/jwt.utils";
+import { getImageUrl } from "../../../utils/baseurl";
+import path from "path";
+import fs from "fs";
+
+import { authenticator } from "otplib";
+import { uploadsDir } from "../../../config/storage.config";
+
+export const createConversation = async (request, reply) => {
+  try {
+    const { otherUserId, myId } = request.body;
+    const prisma = request.server.prisma;
+
+    const missingField = ["otherUserId", "myId"].find(
+      (field) => !request.body[field]
+    );
+
+    if (missingField) {
+      return reply.status(400).send({
+        success: false,
+        message: `${missingField} is required!`,
+      });
+    }
+
+    const otherUserIdInt = parseInt(otherUserId);
+    const myIdInt = parseInt(myId);
+
+    // Check if conversation exists
+    const existing = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: myIdInt } } },
+          { members: { some: { userId: otherUserIdInt } } },
+        ],
+      },
+      include: {
+        members: { include: { user: true } },
+      },
+    });
+
+    if (existing) {
+      return reply.send({ success: true, data: existing });
+    }
+
+    // Create new conversation
+    const conversation = await prisma.conversation.create({
+      data: {
+        isGroup: false,
+        members: {
+          create: [{ userId: myIdInt }, { userId: otherUserIdInt }],
+        },
+      },
+      include: {
+        members: { include: { user: true } },
+      },
+    });
+
+    return reply.send({ success: true, data: conversation });
+  } catch (error) {
+    return reply
+      .status(500)
+      .send({ success: false, message: "Failed to create chat" });
+  }
+};
 
 export const getMyConversationsList = async (request, reply) => {
   try {
     const { myId } = request.params;
     const prisma = request.server.prisma;
 
-    // Validate and parse user ID
-    const currentUserId = parseInt(myId);
-    if (isNaN(currentUserId)) {
+    const conversations = await prisma.conversation.findMany({
+      where: {
+        members: {
+          some: {
+            userId: parseInt(myId),
+          },
+        },
+      },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    return reply.send({ success: true, data: conversations });
+  } catch (error) {
+    return reply
+      .status(500)
+      .send({ success: false, message: "Failed to get conversations" });
+  }
+};
+
+export const createGroupChat = async (request, reply) => {
+  try {
+    const { name, userIds, adminId, avatar } = request.body;
+    const prisma = request.server.prisma;
+
+    const adminIdInt = parseInt(adminId);
+    const userIdsInt = userIds.map((id) => parseInt(id));
+
+    if (!userIds || userIds.length < 2) {
       return reply.status(400).send({
         success: false,
-        message: "Invalid user ID provided!",
+        message: "Group name and at least 2 users are required",
       });
     }
 
-    /**
-     * Helper: Format user with avatar URL
-     */
-    const formatUserWithAvatar = (user) => {
-      if (!user) return null;
-      return {
-        ...user,
-        avatar: user.avatar ? FileService.avatarUrl(user.avatar) : null,
-      };
-    };
+    // Check if all users exist
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: [...userIdsInt, adminIdInt] },
+      },
+    });
 
-    /**
-     * Helper: Process and filter conversation members
-     */
-    const processConversationMembers = (members, isGroup, currentUserId) => {
-      const formattedMembers = members.map((member) => ({
-        ...member,
-        user: formatUserWithAvatar(member.user),
-      }));
-
-      // For private conversations, exclude current user
-      if (!isGroup) {
-        return formattedMembers.filter(
-          (member) => member.userId !== currentUserId
-        );
-      }
-
-      // For group conversations, show current user first, then others (max 3)
-      const [currentUserMembers, otherMembers] = formattedMembers.reduce(
-        ([current, rest], member) =>
-          member.userId === currentUserId
-            ? [[...current, member], rest]
-            : [current, [...rest, member]],
-        [[], []]
-      );
-
-      return [...currentUserMembers, ...otherMembers].slice(0, 3);
-    };
-
-    /**
-     * Helper: Get participant user IDs from conversation members
-     */
-    const getParticipantIds = (members: any[]): number[] => {
-      return members
-        .map((member) => member.userId)
-        .filter((id): id is number => typeof id === "number");
-    };
-
-    /**
-     * Helper: Batch count unread messages for multiple conversations
-     * Counts all messages from other users that aren't deleted for current user
-     */
-    const batchCountUnreadMessages = async (
-      prisma,
-      conversationIds,
-      currentUserId
-    ) => {
-      if (conversationIds.length === 0) return {};
-
-      // Count messages from other users (not deleted for current user)
-      const unreadCounts = await prisma.message.groupBy({
-        by: ["conversationId"],
-        where: {
-          conversationId: { in: conversationIds },
-          userId: { not: currentUserId },
-          NOT: { deletedForUsers: { has: currentUserId } },
-        },
-        _count: {
-          id: true,
-        },
+    if (users.length !== userIdsInt.length + 1) {
+      return reply.status(404).send({
+        success: false,
+        message: "Some users not found",
       });
+    }
 
-      const result: Record<string, number> = {};
-      conversationIds.forEach((id) => {
-        result[id] = 0;
-      });
-
-      unreadCounts.forEach((item: any) => {
-        result[item.conversationId] = item._count.id;
-      });
-
-      return result;
-    };
-
-    /**
-     * Helper: Transform a single conversation
-     */
-    const transformConversation = (
-      conversation,
-      currentUserId,
-      unreadCount
-    ) => {
-      const participantIds = getParticipantIds(conversation.members);
-
-      return {
-        ...conversation,
-        members: processConversationMembers(
-          conversation.members,
-          conversation.isGroup,
-          currentUserId
-        ),
-        messages: conversation.messages.map((message: any) =>
-          transformMessage(message, participantIds)
-        ),
-        avatar: conversation.avatar
-          ? getImageUrl(conversation.avatar)
-          : null,
-        unreadCount,
-      };
-    };
-
-    /**
-     * Helper: Parse and validate pagination parameters
-     */
-    const parsePaginationParams = (query: any) => {
-      const page = Math.max(parseInt(query.page) || 1, 1);
-      const limit = Math.min(Math.max(parseInt(query.limit) || 10, 1), 100);
-      const lastMessageLimit = Math.min(
-        Math.max(parseInt(query.message) || 50, 1),
-        100
-      );
-
-      return {
-        page,
-        limit,
-        lastMessageLimit,
-        skip: (page - 1) * limit,
-      };
-    };
-
-    /**
-     * Helper: Build conversation query where clause
-     */
-    const buildConversationWhereClause = (currentUserId: number) => {
-      return {
+    // Create group conversation with admin
+    const conversation = await prisma.conversation.create({
+      data: {
+        name,
+        isGroup: true,
+        avatar,
+        adminId: adminIdInt,
         members: {
-          some: {
-            userId: currentUserId,
-            isDeleted: false,
-          },
+          create: [
+            { userId: adminIdInt, isAdmin: true },
+            ...userIdsInt.map((userId) => ({
+              userId,
+              isAdmin: false,
+            })),
+          ],
         },
-      };
-    };
-
-    // Parse pagination parameters
-    const { page, limit, lastMessageLimit, skip } = parsePaginationParams(
-      request.query
-    );
-
-    const whereClause = buildConversationWhereClause(currentUserId);
-
-    // Fetch total count and conversations in parallel
-    const [totalItems, conversations] = await Promise.all([
-      prisma.conversation.count({ where: whereClause }),
-      prisma.conversation.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        include: {
-          members: {
-            where: { isDeleted: false },
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  avatar: true,
-                },
+      },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
               },
             },
           },
-          messages: {
-            where: {
-              NOT: { deletedForUsers: { has: currentUserId } },
-            },
-            orderBy: { createdAt: "desc" },
-            take: lastMessageLimit,
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  avatar: true,
-                },
-              },
-              MessageFile: true,
-            },
+        },
+        admin: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
           },
         },
-        orderBy: { updatedAt: "desc" },
-      }),
-    ]);
-
-    // Batch fetch unread counts for all conversations
-    const conversationIds = conversations.map((conv) => conv.id);
-    const unreadCountsMap = await batchCountUnreadMessages(
-      prisma,
-      conversationIds,
-      currentUserId
-    );
-
-    // Transform conversations
-    const transformedConversations = conversations.map((conversation) =>
-      transformConversation(
-        conversation,
-        currentUserId,
-        unreadCountsMap[conversation.id] || 0
-      )
-    );
-
-    // Calculate pagination metadata
-    const totalPages = Math.ceil(totalItems / limit);
+      },
+    });
 
     return reply.send({
       success: true,
-      data: transformedConversations,
-      pagination: {
-        totalItems,
-        totalPages,
-        currentPage: page,
-        itemsPerPage: limit,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-      },
+      message: "Group chat created successfully",
+      data: conversation,
     });
-    
   } catch (error) {
-    request.log.error(error, "Error getting conversations");
+    request.log.error(error);
     return reply.status(500).send({
       success: false,
-      message: "Failed to get conversations",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: "Failed to create group chat",
     });
   }
 };
 
-export const getSingleConversation = async (request, reply) => {
+export const updateGroupPermissions = async (request, reply) => {
   try {
-    const { conversationId } = request.params;
-    const { myId } = request.query;
-    const { message = 50 } = request.query;
+    const {
+      conversationId,
+      adminId,
+      allowMemberAdd,
+      allowMemberMessage,
+      allowEditGroupInfo,
+    } = request.body;
     const prisma = request.server.prisma;
 
-    // Validate conversationId
-    if (!conversationId) {
+    const missingField = ["conversationId", "adminId"].find(
+      (field) => !request.body[field]
+    );
+
+    if (missingField) {
       return reply.status(400).send({
         success: false,
-        message: "conversationId is required!",
+        message: `${missingField} is required!`,
       });
     }
 
-    // Validate and parse user ID
-    if (!myId) {
-      return reply.status(400).send({
-        success: false,
-        message: "myId is required!",
-      });
-    }
-
-    const currentUserId = parseInt(myId);
-    if (isNaN(currentUserId)) {
-      return reply.status(400).send({
-        success: false,
-        message: "Invalid user ID provided!",
-      });
-    }
-
-    // Check if user is a member of the conversation
-    const member = await prisma.conversationMember.findFirst({
+    const isAdmin = await prisma.conversationMember.findFirst({
       where: {
-        conversationId,
-        userId: currentUserId,
-        isDeleted: false,
+        conversationId: conversationId,
+        userId: parseInt(adminId),
+        isAdmin: true,
       },
     });
 
-    if (!member) {
+    if (!isAdmin) {
       return reply.status(403).send({
         success: false,
-        message: "You don't have access to this conversation",
+        message: "Only group admin can update permissions",
       });
     }
 
-    // Parse message limit from query
-    const messageLimit = Math.min(
-      Math.max(parseInt(request.query?.message) || 50, 1),
-      100
+    // Build update object only with provided boolean fields
+    const allowedFields = [
+      "allowMemberAdd",
+      "allowMemberMessage",
+      "allowEditGroupInfo",
+    ];
+
+    const data = Object.fromEntries(
+      allowedFields
+        .filter((field) => typeof request.body[field] === "boolean")
+        .map((field) => [field, request.body[field]])
     );
 
-  // ── FETCH CONVERSATION ───────────────────────────────────────────────
-  const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    include: {
-      members: {
-        where: { isDeleted: false },
-        include: {
-          user: {
-            select: { id: true, name: true, email: true, avatar: true },
-          },
-        },
+    const updatedConversation = await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        allowMemberAdd,
+        allowMemberMessage,
+        allowEditGroupInfo,
       },
-      messages: {
-        where: {
-          NOT: { deletedForUsers: { has: currentUserId } },
-        },
-        // ── ASCENDING ORDER (oldest first) ────────────────────────
-        orderBy: { createdAt: "asc" },
-        take: messageLimit,               // use the clamped limit
-        include: {
-          user: {
-            select: { id: true, name: true, email: true, avatar: true },
-          },
-          MessageFile: true,
-        },
-      },
-    },
-  });
+    });
+
+    return reply.send({
+      success: true,
+      message: "Permissions updated",
+      data: updatedConversation,
+    });
+  } catch (error) {
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to update permissions",
+    });
+  }
+};
+
+export const addUsersToGroup = async (request, reply) => {
+  try {
+    const { userIds, adminId } = request.body;
+    const { conversationId } = request.params;
+    const prisma = request.server.prisma;
+
+    const missingField = ["userIds", "adminId"].find(
+      (field) => !request.body[field]
+    );
+
+    if (missingField) {
+      return reply.status(400).send({
+        success: false,
+        message: `${missingField} is required!`,
+      });
+    }
+
+    if (!conversationId) {
+      return reply.status(400).send({
+        success: false,
+        message: `conversation Id is required!`,
+      });
+    }
+
+    const adminIdInt = parseInt(adminId);
+    const userIdsInt = userIds.map((id) => parseInt(id));
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, isGroup: true },
+    });
 
     if (!conversation) {
       return reply.status(404).send({
         success: false,
-        message: "Conversation not found",
+        message: "Group not found",
       });
     }
 
-    // Helper: Format user with avatar URL
-    const formatUserWithAvatar = (user) => {
-      if (!user) return null;
-      return {
-        ...user,
-        avatar: user.avatar ? FileService.avatarUrl(user.avatar) : null,
-      };
-    };
+    const userMember = await prisma.conversationMember.findFirst({
+      where: {
+        conversationId,
+        userId: adminIdInt,
+      },
+    });
 
-    // Helper: Process and filter conversation members
-    const processConversationMembers = (members, isGroup, currentUserId) => {
-      const formattedMembers = members.map((member) => ({
-        ...member,
-        user: formatUserWithAvatar(member.user),
-      }));
+    const isAdmin = userMember?.isAdmin;
+    const canAddMembers = isAdmin || conversation.allowMemberAdd;
 
-      // For private conversations, exclude current user
-      if (!isGroup) {
-        return formattedMembers.filter(
-          (member) => member.userId !== currentUserId
-        );
-      }
-
-      // For group conversations, return all members (not limited like in list)
-      return formattedMembers;
-    };
-
-    // Helper: Get participant user IDs from conversation members
-    const getParticipantIds = (members: any[]): number[] => {
-      return members
-        .map((member) => member.userId)
-        .filter((id): id is number => typeof id === "number");
-    };
-
-    // Helper: Count unread messages
-    const countUnreadMessages = async (prisma, conversationId, currentUserId) => {
-      const unreadCount = await prisma.message.count({
-        where: {
-          conversationId,
-          userId: { not: currentUserId },
-          NOT: { deletedForUsers: { has: currentUserId } },
-        },
+    if (!canAddMembers) {
+      return reply.status(403).send({
+        success: false,
+        message: "You don't have permission to add users",
       });
-      return unreadCount;
-    };
+    }
 
-    // Get participant IDs and unread count
-    const participantIds = getParticipantIds(conversation.members);
-    const unreadCount = await countUnreadMessages(
-      prisma,
-      conversationId,
-      currentUserId
-    );
+    // Check if new users exist
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIdsInt } },
+    });
 
-    // Transform the conversation
-    const transformedConversation = {
-      ...conversation,
-      members: processConversationMembers(
-        conversation.members,
-        conversation.isGroup,
-        currentUserId
-      ),
-      messages: conversation.messages
-        .reverse() // Reverse to show oldest first
-        .map((message: any) => transformMessage(message, participantIds)),
-      avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
-      unreadCount,
-    };
+    if (users.length !== userIdsInt.length) {
+      return reply.status(404).send({
+        success: false,
+        message: "Some users not found",
+      });
+    }
+
+    const existingMembers = await prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { in: userIdsInt },
+      },
+    });
+
+    if (existingMembers.length > 0) {
+      const existingUserIds = existingMembers.map((member) => member.userId);
+      return reply.status(400).send({
+        success: false,
+        message: `Users already in group: ${existingUserIds.join(", ")}`,
+      });
+    }
+
+    await prisma.conversationMember.createMany({
+      data: userIdsInt.map((userId) => ({
+        userId,
+        conversationId,
+        isAdmin: false,
+      })),
+    });
+
+    // Get updated conversation
+    const updatedConversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+          },
+        },
+        admin: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
 
     return reply.send({
       success: true,
-      data: transformedConversation,
+      message: "Users added successfully",
+      data: updatedConversation,
     });
   } catch (error) {
-    request.log.error(error, "Error getting single conversation");
     return reply.status(500).send({
       success: false,
-      message: "Failed to get conversation",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: "Failed to add users",
+    });
+  }
+};
+
+
+export const removeUsersFromGroup = async (request, reply) => {
+  try {
+    const { userIds, adminId } = request.body;
+    const { conversationId } = request.params;
+    const prisma = request.server.prisma;
+
+    // Validate required fields
+    const missingField = ["userIds", "adminId"].find(
+      (field) => !request.body[field]
+    );
+
+    if (missingField) {
+      return reply.status(400).send({
+        success: false,
+        message: `${missingField} is required!`,
+      });
+    }
+
+    if (!conversationId) {
+      return reply.status(400).send({
+        success: false,
+        message: `conversation Id is required!`,
+      });
+    }
+
+    const adminIdInt = parseInt(adminId);
+    const userIdsInt = userIds.map((id) => parseInt(id));
+
+    // Check if conversation exists and is a group
+    const conversation = await prisma.conversation.findFirst({
+      where: { 
+        id: conversationId, 
+        isGroup: true 
+      },
+      include: {
+        members: true
+      }
+    });
+
+    if (!conversation) {
+      return reply.status(404).send({
+        success: false,
+        message: "Group not found",
+      });
+    }
+
+    // Verify that the requester is the admin
+    const isAdmin = await prisma.conversationMember.findFirst({
+      where: {
+        conversationId,
+        userId: adminIdInt,
+        isAdmin: true,
+      },
+    });
+
+    if (!isAdmin) {
+      return reply.status(403).send({
+        success: false,
+        message: "Only group admin can remove users",
+      });
+    }
+
+    // Prevent admin from removing themselves
+    if (userIdsInt.includes(adminIdInt)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Admin cannot remove themselves from the group",
+      });
+    }
+
+    // Check if users to remove are actually in the group
+    const existingMembers = await prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { in: userIdsInt },
+      },
+    });
+
+    if (existingMembers.length === 0) {
+      return reply.status(404).send({
+        success: false,
+        message: "No specified users found in the group",
+      });
+    }
+
+    const existingUserIds = existingMembers.map((member) => member.userId);
+    
+    // Check if all specified users exist in the group
+    const nonExistingUsers = userIdsInt.filter(
+      (userId) => !existingUserIds.includes(userId)
+    );
+
+    if (nonExistingUsers.length > 0) {
+      return reply.status(404).send({
+        success: false,
+        message: `Some users not found in group: ${nonExistingUsers.join(", ")}`,
+      });
+    }
+
+    // Remove users from the group
+    await prisma.conversationMember.deleteMany({
+      where: {
+        conversationId,
+        userId: { in: userIdsInt },
+      },
+    });
+
+    // Get updated conversation
+    const updatedConversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+          },
+        },
+        admin: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    return reply.send({
+      success: true,
+      message: "Users removed successfully",
+      data: updatedConversation,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to remove users from group",
     });
   }
 };

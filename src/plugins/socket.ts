@@ -513,6 +513,7 @@ export default fp(async (fastify) => {
             }
           };
 
+          
           // Fire and forget pushes
           const pushPromises = receiverFcmTokens.map((token) =>
             fastify.sendDataPush(token, pushData)

@@ -367,6 +367,9 @@
 //   }
 // }
 
+
+
+
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
@@ -456,8 +459,20 @@ export default fp(async (fastify) => {
     // 4. Call Initiate (A calls B)
     socket.on(
       "call_initiate",
-      async ({ senderId, receiverId, callType = "audio" }) => {
-        if (!senderId || !receiverId) return;
+      async ({
+        callerId,
+        receiverId,
+        callType = "audio",
+        callerName,
+        callerAvatar,
+      }: {
+        callerId: string;
+        receiverId: string;
+        callType?: CallType;
+        callerName?: string;
+        callerAvatar?: string;
+      }) => {
+        if (!callerId || !receiverId) return;
 
         if (!onlineUsers.has(receiverId)) {
           socket.emit("call_failed", { message: "User is offline" });
@@ -469,11 +484,22 @@ export default fp(async (fastify) => {
           return;
         }
 
+        const callerIdNumber = Number(callerId);
+        const receiverIdNumber = Number(receiverId);
+
+        if (Number.isNaN(callerIdNumber) || Number.isNaN(receiverIdNumber)) {
+          socket.emit("call_failed", { message: "Invalid user id" });
+          fastify.log.warn(
+            `Call aborted: non-numeric ids caller=${callerId} receiver=${receiverId}`
+          );
+          return;
+        }
+
         let usersData;
         try {
           usersData = await prisma.user.findMany({
             where: {
-              id: { in: [senderId, receiverId] },
+              id: { in: [callerIdNumber, receiverIdNumber] },
             },
             select: {
               id: true,
@@ -484,7 +510,7 @@ export default fp(async (fastify) => {
           });
         } catch (error: any) {
           fastify.log.error(
-            `Failed to fetch sender info for ${senderId}: ${error.message}`
+            `Failed to fetch caller info for ${callerId}: ${error.message}`
           );
           socket.emit("call_failed", {
             message: "Failed to retrieve user info",
@@ -492,24 +518,26 @@ export default fp(async (fastify) => {
           return;
         }
 
-        // Extract sender and receiver info from results
-        const senderInfo = usersData.find((u) => u.id === senderId);
-        const receiverFcmTokens =
-          usersData.find((u) => u.id === receiverId)?.fcmToken || [];
+        // Extract caller and receiver info from results
+        const callerInfoFromDb = usersData.find((u) => u.id === callerIdNumber);
+        const receiverData = usersData.find((u) => u.id === receiverIdNumber);
 
-        if (!senderInfo) {
-          socket.emit("call_failed", { message: "Sender not found" });
-          return;
-        }
+        const callerInfo = callerInfoFromDb || {
+          id: callerIdNumber,
+          name: callerName || `User ${callerId}`,
+          avatar: callerAvatar || null,
+        };
+
+        const receiverFcmTokens = receiverData?.fcmToken || [];
 
         // Send push only to receiver (via FCM tokens)
         if (receiverFcmTokens.length > 0) {
           const pushData = {
             type: "november_is_comming",
-            senderId,
-            senderInfo: {
-              ...senderInfo,
-              avatar: FileService.avatarUrl(senderInfo.avatar || ""),
+            callerId,
+            callerInfo: {
+              ...callerInfo,
+              avatar: FileService.avatarUrl(callerInfo.avatar || ""),
             }
           };
 
@@ -537,13 +565,13 @@ export default fp(async (fastify) => {
         }
 
         // Mark both as calling
-        activeCalls.set(senderId, {
+        activeCalls.set(callerId, {
           with: receiverId,
           status: "calling",
           type: callType,
         });
         activeCalls.set(receiverId, {
-          with: senderId,
+          with: callerId,
           status: "calling",
           type: callType,
         });
@@ -551,46 +579,46 @@ export default fp(async (fastify) => {
         const receiverSocketId = onlineUsers.get(receiverId);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit("call_incoming", {
-            senderId,
+            callerId,
             callType,
-            senderInfo: {
-              ...senderInfo,
-              avatar: FileService.avatarUrl(senderInfo?.avatar || ""),
+            callerInfo: {
+              ...callerInfo,
+              avatar: FileService.avatarUrl(callerInfo?.avatar || ""),
             },
           });
         }
 
-        fastify.log.info(`${senderId} calling ${receiverId} (${callType})`);
+        fastify.log.info(`${callerId} calling ${receiverId} (${callType})`);
       }
     );
 
     // 5. Call Accept
     socket.on(
       "call_accept",
-      ({ senderId, receiverId }: { senderId: string; receiverId: string }) => {
-        const callerId = senderId;
+      ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+        const callerIdLocal = callerId;
         const calleeId = receiverId;
 
-        const callData = activeCalls.get(callerId);
+        const callData = activeCalls.get(callerIdLocal);
         if (!callData || callData.with !== calleeId) return;
 
         // Update status to in_call
-        activeCalls.set(callerId, { ...callData, status: "in_call" });
+        activeCalls.set(callerIdLocal, { ...callData, status: "in_call" });
         activeCalls.set(calleeId, {
-          with: callerId,
+          with: callerIdLocal,
           status: "in_call",
           type: callData.type,
         });
 
-        const callerSocketId = onlineUsers.get(callerId);
+        const callerSocketId = onlineUsers.get(callerIdLocal);
         if (callerSocketId) {
           io.to(callerSocketId).emit("call_accepted", {
-            senderId: calleeId,
+            receiverId: calleeId,
             callType: callData.type,
           });
         }
 
-        fastify.log.info(`Call accepted: ${callerId} ↔ ${calleeId}`);
+        fastify.log.info(`Call accepted: ${callerIdLocal} ↔ ${calleeId}`);
       }
     );
 
@@ -657,13 +685,13 @@ export default fp(async (fastify) => {
     // 9. Call Decline
     socket.on(
       "call_decline",
-      ({ senderId, receiverId }: { senderId: string; receiverId: string }) => {
-        activeCalls.delete(senderId);
+      ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+        activeCalls.delete(callerId);
         activeCalls.delete(receiverId);
 
-        const callerSocketId = onlineUsers.get(senderId);
+        const callerSocketId = onlineUsers.get(callerId);
         if (callerSocketId) {
-          io.to(callerSocketId).emit("call_declined", { senderId: receiverId });
+          io.to(callerSocketId).emit("call_declined", { receiverId });
         }
       }
     );
@@ -671,13 +699,13 @@ export default fp(async (fastify) => {
     // 10. Call End
     socket.on(
       "call_end",
-      ({ senderId, receiverId }: { senderId: string; receiverId: string }) => {
-        activeCalls.delete(senderId);
+      ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+        activeCalls.delete(callerId);
         activeCalls.delete(receiverId);
 
         const peerSocketId = onlineUsers.get(receiverId);
         if (peerSocketId) {
-          io.to(peerSocketId).emit("call_ended", { senderId });
+          io.to(peerSocketId).emit("call_ended", { callerId });
         }
       }
     );

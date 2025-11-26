@@ -367,9 +367,6 @@
 //   }
 // }
 
-
-
-
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
@@ -538,10 +535,9 @@ export default fp(async (fastify) => {
             callerInfo: {
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo.avatar || ""),
-            }
+            },
           };
 
-          
           // Fire and forget pushes
           const pushPromises = receiverFcmTokens.map((token) =>
             fastify.sendDataPush(token, pushData)
@@ -698,18 +694,107 @@ export default fp(async (fastify) => {
     );
 
     // 10. Call End
+    // socket.on(
+    //   "call_end",
+    //   ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+    //     activeCalls.delete(callerId);
+    //     activeCalls.delete(receiverId);
+
+    //     const peerSocketId = onlineUsers.get(receiverId);
+    //     if (peerSocketId) {
+    //       io.to(peerSocketId).emit("call_ended", { callerId });
+    //     }
+    //   }
+    // );
+
+    // 10. Call End
+    // 10. Call End - Fixed version
     socket.on(
       "call_end",
       ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
-        activeCalls.delete(callerId);
-        activeCalls.delete(receiverId);
+        const endedByUserId = getUserId(); // কে কল শেষ করছে
+        if (!endedByUserId) return;
 
-        const peerSocketId = onlineUsers.get(receiverId);
-        if (peerSocketId) {
-          io.to(peerSocketId).emit("call_ended", { callerId });
+        // ভেরিফিকেশন: আসলে এই ইউজাররা একে অপরের সাথে কল করছে কিনা
+        const callerCall = activeCalls.get(callerId);
+        const receiverCall = activeCalls.get(receiverId);
+
+        // শুধুমাত্র ডিলিট করবেন যদি তারা সত্যিই একে অপরের সাথে কল করছে
+        if (
+          callerCall &&
+          callerCall.with === receiverId &&
+          receiverCall &&
+          receiverCall.with === callerId
+        ) {
+          activeCalls.delete(callerId);
+          activeCalls.delete(receiverId);
+
+          // শুধুমাত্র প্রতিপক্ষকে নোটিফাই করুন
+          const opponentId = endedByUserId === callerId ? receiverId : callerId;
+          const opponentSocketId = onlineUsers.get(opponentId);
+
+          if (opponentSocketId && opponentSocketId !== socket.id) {
+            io.to(opponentSocketId).emit("call_ended", {
+              endedBy: endedByUserId,
+              reason: "ended_by_user",
+            });
+          }
+
+          fastify.log.info(
+            `Call ended by ${endedByUserId}: ${callerId} ❌ ${receiverId}`
+          );
+        } else {
+          fastify.log.warn(
+            `Invalid call_end attempt by ${endedByUserId} for call ${callerId}-${receiverId}`
+          );
         }
       }
     );
+
+    //-----------------for group call--------------
+    // 10. Call End - More secure version
+    // socket.on(
+    //   "call_end",
+    //   (data: { callerId?: string; receiverId?: string }) => {
+    //     const endedByUserId = getUserId();
+    //     if (!endedByUserId) return;
+
+    //     // বর্তমান ইউজারের অ্যাক্টিভ কল খুঁজুন
+    //     const userCall = activeCalls.get(endedByUserId);
+    //     if (!userCall) {
+    //       fastify.log.warn(`No active call found for user ${endedByUserId}`);
+    //       return;
+    //     }
+
+    //     const opponentId = userCall.with;
+
+    //     // opponent এর কল ডাটাও চেক করুন
+    //     const opponentCall = activeCalls.get(opponentId);
+    //     if (!opponentCall || opponentCall.with !== endedByUserId) {
+    //       fastify.log.error(`Call data inconsistency for ${endedByUserId} and ${opponentId}`);
+    //       // ডাটা inconsistent, তাই ক্লিনআপ করুন
+    //       activeCalls.delete(endedByUserId);
+    //       activeCalls.delete(opponentId);
+    //       return;
+    //     }
+
+    //     // কল ডিলিট করুন
+    //     activeCalls.delete(endedByUserId);
+    //     activeCalls.delete(opponentId);
+
+    //     // প্রতিপক্ষকে নোটিফাই করুন
+    //     const opponentSocketId = onlineUsers.get(opponentId);
+    //     if (opponentSocketId) {
+    //       io.to(opponentSocketId).emit("call_ended", {
+    //         endedBy: endedByUserId,
+    //         reason: "ended_by_user"
+    //       });
+    //     }
+
+    //     fastify.log.info(`Call ended by ${endedByUserId}: ${endedByUserId} ❌ ${opponentId}`);
+    //   }
+    // );
+    //---------------------------------------------------
 
     // 11. Disconnect - Cleanup
     socket.on("disconnect", () => {

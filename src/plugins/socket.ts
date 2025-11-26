@@ -623,6 +623,7 @@ export default fp(async (fastify) => {
     );
 
     // 6. WebRTC Offer (SDP Offer)
+    //---------------------------------------------------
     socket.on(
       "webrtc_offer",
       ({
@@ -646,18 +647,18 @@ export default fp(async (fastify) => {
     socket.on(
       "webrtc_answer",
       ({
-        receiverId,
+        callerId,
         sdp,
       }: {
-        receiverId: string;
+        callerId: string;
         sdp: RTCSessionDescriptionInit;
       }) => {
         const senderId = getUserId();
-        if (!senderId || !receiverId) return;
+        if (!senderId || !callerId) return;
 
-        const targetSocketId = onlineUsers.get(receiverId);
+        const targetSocketId = onlineUsers.get(callerId);
         if (targetSocketId) {
-          io.to(targetSocketId).emit("webrtc_answer", { senderId, sdp });
+          io.to(targetSocketId).emit("webrtc_answer", { callerId, sdp });
         }
       }
     );

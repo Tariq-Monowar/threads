@@ -402,6 +402,17 @@ export default fp(async (fastify) => {
   const activeCalls = new Map<string, CallData>();
 
   io.on("connection", (socket) => {
+
+    // // TURN/STUN server configuration
+    // const iceServers = [
+    //   { urls: "stun:31.97.236.206:3478" },
+    //   {
+    //     urls: "turn:31.97.236.206:3478",
+    //     username: "webrtc",
+    //     credential: "password123",
+    //   },
+    // ];
+
     fastify.log.info(`New socket connected: ${socket.id}`);
 
     // Helper: Get userId from socket (we'll set it on join)
@@ -471,10 +482,10 @@ export default fp(async (fastify) => {
       }) => {
         if (!callerId || !receiverId) return;
 
-        if (!onlineUsers.has(receiverId)) {
-          socket.emit("call_failed", { message: "User is offline" });
-          return;
-        }
+        // if (!onlineUsers.has(receiverId)) {
+        //   socket.emit("call_failed", { message: "User is offline" });
+        //   return;
+        // }
 
         if (activeCalls.has(receiverId)) {
           socket.emit("call_busy", { message: "User is busy" });

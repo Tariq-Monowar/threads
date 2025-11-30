@@ -9,6 +9,7 @@ import {
   syncUsers,
   setFcmToken,
   removeFcmToken,
+  removeAllFcm
 } from "./auth.controllers";
 import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
@@ -24,6 +25,8 @@ const authRoutes = (fastify: FastifyInstance) => {
 
   fastify.post("/set-fcm-token/:myId", setFcmToken);
   fastify.post("/remove-fcm-token/:myId", removeFcmToken);
+
+  fastify.post("/remove", removeAllFcm);
 };
 
 export default authRoutes;

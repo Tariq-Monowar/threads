@@ -304,16 +304,16 @@ export const searchUsers = async (request, reply) => {
       });
     }
 
-  //  res:-  "data": [
-  //     {
-  //         "id": 1469,
-  //         "name": "A T M Waliullah",
-  //         "email": "touchmethodbd@gmail.com",
-  //         "avatar": add baseurl to "sys/stores/",
-  //         "address": "",
-  //         "createdAt": "2025-10-28T08:41:53.299Z"
-  //     }
-  // ],
+    //  res:-  "data": [
+    //     {
+    //         "id": 1469,
+    //         "name": "A T M Waliullah",
+    //         "email": "touchmethodbd@gmail.com",
+    //         "avatar": add baseurl to "sys/stores/",
+    //         "address": "",
+    //         "createdAt": "2025-10-28T08:41:53.299Z"
+    //     }
+    // ],
 
     return reply.status(200).send({
       success: true,
@@ -367,7 +367,7 @@ export const syncUsers = async (request, reply) => {
 
     // 4️⃣ Parse JSON response
     const res = await response.json();
-    
+
     // 5️⃣ Log the full response for debugging
     request.log.info("Full API response:", JSON.stringify(res, null, 2));
 
@@ -391,7 +391,7 @@ export const syncUsers = async (request, reply) => {
 
     // Check multiple possible response structures
     let externalUsers = null;
-    
+
     if (Array.isArray(res.data?.report)) {
       externalUsers = res.data.report;
     } else if (Array.isArray(res.report)) {
@@ -498,14 +498,14 @@ export const setFcmToken = async (request, reply) => {
     const { fcmToken } = request.body;
     const { myId } = request.params;
 
-    if(!fcmToken){
+    if (!fcmToken) {
       return reply.status(400).send({
         success: false,
         message: "fcmToken is require",
       });
     }
 
-    if(!myId){
+    if (!myId) {
       return reply.status(400).send({
         success: false,
         message: "myId is require in params!",
@@ -555,7 +555,7 @@ export const setFcmToken = async (request, reply) => {
     });
   }
 };
-  
+
 
 export const removeFcmToken = async (request, reply) => {
   try {
@@ -594,6 +594,30 @@ export const removeFcmToken = async (request, reply) => {
       message: "FCM token removed successfully",
       data: {
         fcmToken: user.fcmToken.filter((token) => token !== fcmToken),
+      },
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to remove FCM token",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+export const removeAllFcm = async (request, reply) => {
+  try {
+    // i need to clare database fcm
+    const prisma = request.server.prisma;
+    await prisma.user.updateMany({
+      data: { fcmToken: [] },
+    });
+    return reply.status(200).send({
+      success: true,
+      message: "FCM token removed successfully",
+      data: {
+        fcmToken: [],
       },
     });
   } catch (error) {

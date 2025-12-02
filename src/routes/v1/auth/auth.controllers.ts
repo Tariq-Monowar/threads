@@ -498,17 +498,17 @@ export const setFcmToken = async (request, reply) => {
     const { fcmToken } = request.body;
     const { myId } = request.params;
 
-    if (!fcmToken) {
+    if (!fcmToken || typeof fcmToken !== "string") {
       return reply.status(400).send({
         success: false,
-        message: "fcmToken is require",
+        message: "fcmToken is required and must be a string",
       });
     }
 
     if (!myId) {
       return reply.status(400).send({
         success: false,
-        message: "myId is require in params!",
+        message: "myId is required in params!",
       });
     }
 
@@ -525,6 +525,7 @@ export const setFcmToken = async (request, reply) => {
 
     const user = await prisma.user.findUnique({
       where: { id: currentUserId },
+      select: { id: true, fcmToken: true },
     });
 
     if (!user) {
@@ -533,16 +534,39 @@ export const setFcmToken = async (request, reply) => {
         message: "User not found",
       });
     }
-    await prisma.user.update({
+
+    // Handle null or undefined fcmToken array
+    const currentTokens = user.fcmToken || [];
+    const tokenToAdd = fcmToken.trim();
+
+    // Check if token already exists to avoid duplicates
+    const tokenExists = currentTokens.some(
+      (token) => token && token.trim() === tokenToAdd
+    );
+
+    if (tokenExists) {
+      return reply.status(200).send({
+        success: true,
+        message: "FCM token already exists",
+        data: {
+          fcmToken: currentTokens,
+        },
+      });
+    }
+
+    // Add the new token
+    const updatedTokens = [...currentTokens, tokenToAdd];
+    const updatedUser = await prisma.user.update({
       where: { id: currentUserId },
-      data: { fcmToken: [...user.fcmToken, fcmToken] },
+      data: { fcmToken: updatedTokens },
+      select: { id: true, fcmToken: true },
     });
 
     return reply.status(200).send({
       success: true,
       message: "FCM token set successfully",
       data: {
-        fcmToken: [...user.fcmToken, fcmToken],
+        fcmToken: updatedUser.fcmToken,
       },
     });
 
@@ -567,6 +591,14 @@ export const removeFcmToken = async (request, reply) => {
     }
 
     const { fcmToken } = request.body;
+
+    if (!fcmToken || typeof fcmToken !== "string") {
+      return reply.status(400).send({
+        success: false,
+        message: "fcmToken is required and must be a string",
+      });
+    }
+
     const { myId } = request.params;
     const currentUserId = Number(myId);
     if (isNaN(currentUserId)) {
@@ -575,25 +607,56 @@ export const removeFcmToken = async (request, reply) => {
         message: "Invalid user ID — must be a number",
       });
     }
+
     const prisma = request.server.prisma;
     const user = await prisma.user.findUnique({
       where: { id: currentUserId },
+      select: { id: true, fcmToken: true },
     });
+
     if (!user) {
       return reply.status(404).send({
         success: false,
         message: "User not found",
       });
     }
-    await prisma.user.update({
+
+    // Handle null or undefined fcmToken array
+    const currentTokens = user.fcmToken || [];
+    
+    // Filter out the token to remove (trim both for exact matching)
+    const tokenToRemove = fcmToken.trim();
+    const updatedTokens = currentTokens.filter(
+      (token) => token && token.trim() !== tokenToRemove
+    );
+
+    // Check if token was actually in the array
+    const tokenExists = currentTokens.some(
+      (token) => token && token.trim() === tokenToRemove
+    );
+
+    if (!tokenExists) {
+      return reply.status(200).send({
+        success: true,
+        message: "FCM token not found in user's token list (may have already been removed)",
+        data: {
+          fcmToken: currentTokens,
+        },
+      });
+    }
+
+    // Update the user with the filtered tokens
+    const updatedUser = await prisma.user.update({
       where: { id: currentUserId },
-      data: { fcmToken: user.fcmToken.filter((token) => token !== fcmToken) },
+      data: { fcmToken: updatedTokens },
+      select: { id: true, fcmToken: true },
     });
+
     return reply.status(200).send({
       success: true,
       message: "FCM token removed successfully",
       data: {
-        fcmToken: user.fcmToken.filter((token) => token !== fcmToken),
+        fcmToken: updatedUser.fcmToken,
       },
     });
   } catch (error) {

@@ -1,372 +1,3 @@
-// // import fp from "fastify-plugin";
-// // import { Server } from "socket.io";
-
-// // export default fp(async (fastify) => {
-// //   const io = new Server(fastify.server, {
-// //     cors: {
-// //       origin: [
-// //         "http://localhost:5173",
-// //         "http://localhost:3000",
-// //         "http://127.0.0.1:50468",
-// //         "http://localhost:4002",
-// //         "http://127.0.0.1:5500",
-// //       ],
-// //       methods: ["GET", "POST"],
-// //       credentials: true,
-// //     },
-// //   });
-
-// //   const onlineUsers = new Map<string, string>();
-
-// //   io.on("connection", (socket) => {
-// //     fastify.log.info(`Socket connected: ${socket.id}`);
-
-// //     // User connects and joins their personal room
-// //     socket.on("join", (userId: string) => {
-// //       onlineUsers.set(userId, socket.id);
-// //       socket.join(userId);
-// //       fastify.log.info(`User ${userId} connected`);
-// //       io.emit("online-users", Array.from(onlineUsers.keys()));
-// //     });
-
-// //     // Typing indicators
-// //     socket.on("typing", ({ conversationId, userId, userName }) => {
-// //       socket.broadcast.emit("user_typing", {
-// //         conversationId,
-// //         userId,
-// //         userName,
-// //         isTyping: true
-// //       });
-// //     });
-
-// //     socket.on("stop_typing", ({ conversationId, userId, userName }) => {
-// //       socket.broadcast.emit("user_stop_typing", {
-// //         conversationId,
-// //         userId,
-// //         userName,
-// //         isTyping: false
-// //       });
-// //     });
-
-// //     // Disconnect handler
-// //     socket.on("disconnect", () => {
-// //       for (const [userId, socketId] of onlineUsers.entries()) {
-// //         if (socketId === socket.id) {
-// //           onlineUsers.delete(userId);
-// //           fastify.log.info(`User ${userId} disconnected`);
-// //           break;
-// //         }
-// //       }
-// //       io.emit("online-users", Array.from(onlineUsers.keys()));
-// //       fastify.log.info(`Socket disconnected: ${socket.id}`);
-// //     });
-// //   });
-
-// //   fastify.decorate("io", io);
-// //   fastify.decorate("onlineUsers", onlineUsers);
-// // });
-
-// // declare module "fastify" {
-// //   interface FastifyInstance {
-// //     io: Server;
-// //     onlineUsers: Map<string, string>;
-// //   }
-// // }
-
-// import fp from "fastify-plugin";
-// import { Server } from "socket.io";
-
-// type CallType = "audio" | "video";
-// type CallStatus = "calling" | "in_call";
-
-// interface CallData {
-//   with: string;
-//   status: CallStatus;
-//   type: CallType;
-// }
-
-// export default fp(async (fastify) => {
-//   const io = new Server(fastify.server, {
-//     cors: {
-//       origin: [
-//         "http://localhost:5173",
-//         "http://localhost:3000",
-//         "http://127.0.0.1:50468",
-//         "http://localhost:4002",
-//         "http://127.0.0.1:5500",
-//       ],
-//       methods: ["GET", "POST"],
-//       credentials: true,
-//     },
-//   });
-
-//   //state
-//   const onlineUsers = new Map<string, string>();
-//   const activeCalls = new Map<string, CallData>();
-
-//   io.on("connection", (socket) => {
-//     fastify.log.info(`New socket connected: ${socket.id}`);
-
-//     // Helper: Get userId from socket (we'll set it on join)
-//     const getUserId = () => {
-//       for (const [userId, sid] of onlineUsers.entries()) {
-//         if (sid === socket.id) return userId;
-//       }
-//       return null;
-//     };
-
-//     // 1. User Join
-//     socket.on("join", (userId: string) => {
-//       if (!userId) return;
-
-//       onlineUsers.set(userId, socket.id);
-//       socket.join(userId);
-//       fastify.log.info(`User joined: ${userId}`);
-
-//       io.emit("online-users", Array.from(onlineUsers.keys()));
-//     });
-
-//     // 2. Typing Indicators
-//     socket.on(
-//       "typing",
-//       ({ targetUserId, conversationId, userName, userId }) => {
-//         socket
-//           .to(targetUserId)
-//           .emit("user_typing", {
-//             conversationId,
-//             userId,
-//             userName,
-//             isTyping: true,
-//           });
-//       }
-//     );
-
-//     socket.on(
-//       "stop_typing",
-//       ({ targetUserId, conversationId, userName, userId }) => {
-//         socket
-//           .to(targetUserId)
-//           .emit("user_stop_typing", {
-//             conversationId,
-//             userId,
-//             userName,
-//             isTyping: false,
-//           });
-//       }
-//     );
-
-//     // 3. Get online users
-//     socket.on("get_online_users", () => {
-//       socket.emit("online-users", Array.from(onlineUsers.keys()));
-//     });
-
-//     // 4. Call Initiate (A calls B)
-//     socket.on(
-//       "call_initiate",
-//       ({
-//         fromUserId,
-//         toUserId,
-//         callType = "audio",
-//       }: {
-//         fromUserId: string;
-//         toUserId: string;
-//         callType: CallType;
-//       }) => {
-//         if (!fromUserId || !toUserId) return;
-
-//         if (!onlineUsers.has(toUserId)) {
-//           socket.emit("call_failed", { message: "User is offline" });
-//           return;
-//         }
-
-//         if (activeCalls.has(toUserId)) {
-//           socket.emit("call_busy", { message: "User is busy" });
-//           return;
-//         }
-
-//         // Mark both as calling
-//         activeCalls.set(fromUserId, {
-//           with: toUserId,
-//           status: "calling",
-//           type: callType,
-//         });
-//         activeCalls.set(toUserId, {
-//           with: fromUserId,
-//           status: "calling",
-//           type: callType,
-//         });
-
-//         const receiverSocketId = onlineUsers.get(toUserId);
-//         if (receiverSocketId) {
-//           io.to(receiverSocketId).emit("call_incoming", {
-//             fromUserId,
-//             callType,
-//           });
-//         }
-
-//         fastify.log.info(`${fromUserId} calling ${toUserId} (${callType})`);
-//       }
-//     );
-
-//     // 5. Call Accept
-//     socket.on(
-//       "call_accept",
-//       ({ fromUserId, toUserId }: { fromUserId: string; toUserId: string }) => {
-//         const callerId = fromUserId;
-//         const calleeId = toUserId;
-
-//         const callData = activeCalls.get(callerId);
-//         if (!callData || callData.with !== calleeId) return;
-
-//         // Update status to in_call
-//         activeCalls.set(callerId, { ...callData, status: "in_call" });
-//         activeCalls.set(calleeId, {
-//           with: callerId,
-//           status: "in_call",
-//           type: callData.type,
-//         });
-
-//         const callerSocketId = onlineUsers.get(callerId);
-//         if (callerSocketId) {
-//           io.to(callerSocketId).emit("call_accepted", {
-//             fromUserId: calleeId,
-//             callType: callData.type,
-//           });
-//         }
-
-//         fastify.log.info(`Call accepted: ${callerId} ↔ ${calleeId}`);
-//       }
-//     );
-
-//     // 6. WebRTC Offer (SDP Offer)
-//     socket.on(
-//       "webrtc_offer",
-//       ({
-//         toUserId,
-//         sdp,
-//       }: {
-//         toUserId: string;
-//         sdp: RTCSessionDescriptionInit;
-//       }) => {
-//         const fromUserId = getUserId();
-//         if (!fromUserId || !toUserId) return;
-
-//         const targetSocketId = onlineUsers.get(toUserId);
-//         if (targetSocketId) {
-//           io.to(targetSocketId).emit("webrtc_offer", { fromUserId, sdp });
-//         }
-//       }
-//     );
-
-//     // 7. WebRTC Answer (SDP Answer)
-//     socket.on(
-//       "webrtc_answer",
-//       ({
-//         toUserId,
-//         sdp,
-//       }: {
-//         toUserId: string;
-//         sdp: RTCSessionDescriptionInit;
-//       }) => {
-//         const fromUserId = getUserId();
-//         if (!fromUserId || !toUserId) return;
-
-//         const targetSocketId = onlineUsers.get(toUserId);
-//         if (targetSocketId) {
-//           io.to(targetSocketId).emit("webrtc_answer", { fromUserId, sdp });
-//         }
-//       }
-//     );
-
-//     // 8. ICE Candidate
-//     socket.on(
-//       "webrtc_ice",
-//       ({
-//         toUserId,
-//         candidate,
-//       }: {
-//         toUserId: string;
-//         candidate: RTCIceCandidate;
-//       }) => {
-//         const fromUserId = getUserId();
-//         if (!fromUserId || !toUserId) return;
-
-//         const targetSocketId = onlineUsers.get(toUserId);
-//         if (targetSocketId) {
-//           io.to(targetSocketId).emit("webrtc_ice", { fromUserId, candidate });
-//         }
-//       }
-//     );
-
-//     // 9. Call Decline
-//     socket.on(
-//       "call_decline",
-//       ({ fromUserId, toUserId }: { fromUserId: string; toUserId: string }) => {
-//         activeCalls.delete(fromUserId);
-//         activeCalls.delete(toUserId);
-
-//         const callerSocketId = onlineUsers.get(fromUserId);
-//         if (callerSocketId) {
-//           io.to(callerSocketId).emit("call_declined", { fromUserId: toUserId });
-//         }
-//       }
-//     );
-
-//     // 10. Call End
-//     socket.on(
-//       "call_end",
-//       ({ fromUserId, toUserId }: { fromUserId: string; toUserId: string }) => {
-//         activeCalls.delete(fromUserId);
-//         activeCalls.delete(toUserId);
-
-//         const peerSocketId = onlineUsers.get(toUserId);
-//         if (peerSocketId) {
-//           io.to(peerSocketId).emit("call_ended", { fromUserId });
-//         }
-//       }
-//     );
-
-//     // 11. Disconnect - Cleanup
-//     socket.on("disconnect", () => {
-//       const userId = getUserId();
-//       if (!userId) return;
-
-//       onlineUsers.delete(userId);
-
-//       if (activeCalls.has(userId)) {
-//         const call = activeCalls.get(userId)!;
-//         const peerId = call.with;
-//         activeCalls.delete(userId);
-//         activeCalls.delete(peerId);
-
-//         const peerSocketId = onlineUsers.get(peerId);
-//         if (peerSocketId) {
-//           io.to(peerSocketId).emit("call_ended", {
-//             fromUserId: userId,
-//             reason: "disconnected",
-//           });
-//         }
-//       }
-
-//       io.emit("online-users", Array.from(onlineUsers.keys()));
-//       fastify.log.info(`User disconnected: ${userId}`);
-//     });
-//   });
-
-//   // Decorate Fastify instance
-//   fastify.decorate("io", io);
-//   fastify.decorate("onlineUsers", onlineUsers);
-//   fastify.decorate("activeCalls", activeCalls);
-// });
-
-// declare module "fastify" {
-//   interface FastifyInstance {
-//     io: Server;
-//     onlineUsers: Map<string, string>;
-//     activeCalls: Map<string, CallData>;
-//   }
-// }
-
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
@@ -400,6 +31,81 @@ export default fp(async (fastify) => {
   //state
   const onlineUsers = new Map<string, string>();
   const activeCalls = new Map<string, CallData>();
+  //---------------------------------------------------
+  const callHistoryMap = new Map<string, string>();
+
+  // Helper function to save call history
+  const saveCallHistory = async (
+    callerId: number,
+    receiverId: number,
+    type: "AUDIO" | "VIDEO",
+    status: "ONGOING" | "COMPLETED" | "MISSED" | "DECLINED" | "CANCELED",
+    conversationId?: string,
+    startedAt?: Date,
+    endedAt?: Date
+  ): Promise<string | null> => {
+    try {
+      if (!fastify.prisma) {
+        fastify.log.warn("Prisma client not available for call history");
+        return null;
+      }
+
+      const callData: any = {
+        callerId,
+        receiverId,
+        type,
+        status,
+        participantIds: [],
+      };
+
+      if (conversationId) {
+        callData.conversationId = conversationId;
+      }
+
+      if (startedAt) {
+        callData.startedAt = startedAt;
+      }
+
+      if (endedAt) {
+        callData.endedAt = endedAt;
+      }
+
+      const call = await (fastify.prisma as any).call.create({
+        data: callData,
+      });
+
+      return call.id;
+    } catch (error: any) {
+      fastify.log.error(`Failed to save call history: ${error.message}`);
+      return null;
+    }
+  };
+
+  // Helper function to update call history
+  const updateCallHistory = async (
+    callId: string,
+    status: "ONGOING" | "COMPLETED" | "MISSED" | "DECLINED" | "CANCELED",
+    endedAt?: Date
+  ): Promise<void> => {
+    try {
+      if (!fastify.prisma) {
+        return;
+      }
+
+      const updateData: any = { status };
+      if (endedAt) {
+        updateData.endedAt = endedAt;
+      }
+
+      await (fastify.prisma as any).call.update({
+        where: { id: callId },
+        data: updateData,
+      });
+    } catch (error: any) {
+      fastify.log.error(`Failed to update call history: ${error.message}`);
+    }
+  };
+  //---------------------------------------------------
 
   io.on("connection", (socket) => {
 
@@ -608,6 +314,24 @@ export default fp(async (fastify) => {
           type: callType,
         });
 
+         //---------------------------------------------------
+        // Save call history
+        const callKey = `${callerId}-${receiverId}`;
+        const callTypeEnum = callType.toUpperCase() as "AUDIO" | "VIDEO";
+        const callId = await saveCallHistory(
+          callerIdNumber,
+          receiverIdNumber,
+          callTypeEnum,
+          "ONGOING",
+          undefined,
+          new Date()
+        );
+        if (callId) {
+          callHistoryMap.set(callKey, callId);
+          callHistoryMap.set(`${receiverId}-${callerId}`, callId);
+        }
+         //---------------------------------------------------
+
         const receiverSocketId = onlineUsers.get(receiverId);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit("call_incoming", {
@@ -641,6 +365,17 @@ export default fp(async (fastify) => {
           status: "in_call",
           type: callData.type,
         });
+
+         //---------------------------------------------------
+        // Update call history status to ONGOING
+        const callKey = `${callerIdLocal}-${calleeId}`;
+        const callId = callHistoryMap.get(callKey);
+        if (callId) {
+          updateCallHistory(callId, "ONGOING").catch((error) => {
+            fastify.log.error(`Failed to update call history on accept: ${error.message}`);
+          });
+        }
+         //---------------------------------------------------
 
         const callerSocketId = onlineUsers.get(callerIdLocal);
         if (callerSocketId) {
@@ -722,6 +457,22 @@ export default fp(async (fastify) => {
         activeCalls.delete(callerId);
         activeCalls.delete(receiverId);
 
+         //---------------------------------------------------
+        // Update call history status to DECLINED
+        const callKey = `${callerId}-${receiverId}`;
+        const callId = callHistoryMap.get(callKey);
+        if (callId) {
+          updateCallHistory(callId, "DECLINED", new Date())
+            .then(() => {
+              callHistoryMap.delete(callKey);
+              callHistoryMap.delete(`${receiverId}-${callerId}`);
+            })
+            .catch((error) => {
+              fastify.log.error(`Failed to update call history on decline: ${error.message}`);
+            });
+        }
+         //---------------------------------------------------
+
         const callerSocketId = onlineUsers.get(callerId);
         if (callerSocketId) {
           io.to(callerSocketId).emit("call_declined", { receiverId });
@@ -762,8 +513,28 @@ export default fp(async (fastify) => {
           receiverCall &&
           receiverCall.with === callerId
         ) {
+           //---------------------------------------------------
+          const wasAccepted = callerCall.status === "in_call";
+           //---------------------------------------------------
           activeCalls.delete(callerId);
           activeCalls.delete(receiverId);
+
+           //---------------------------------------------------
+          // Update call history status - COMPLETED if accepted, CANCELED if not
+          const callKey = `${callerId}-${receiverId}`;
+          const callId = callHistoryMap.get(callKey);
+          if (callId) {
+            const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
+            updateCallHistory(callId, finalStatus as "COMPLETED" | "CANCELED", new Date())
+              .then(() => {
+                callHistoryMap.delete(callKey);
+                callHistoryMap.delete(`${receiverId}-${callerId}`);
+              })
+              .catch((error) => {
+                fastify.log.error(`Failed to update call history on end: ${error.message}`);
+              });
+          }
+           //---------------------------------------------------
 
           // শুধুমাত্র প্রতিপক্ষকে নোটিফাই করুন
           const opponentId = endedByUserId === callerId ? receiverId : callerId;
@@ -844,6 +615,23 @@ export default fp(async (fastify) => {
         const peerId = call.with;
         activeCalls.delete(userId);
         activeCalls.delete(peerId);
+
+         //---------------------------------------------------
+
+        // Update call history status to MISSED
+        const callKey = `${userId}-${peerId}`;
+        const callId = callHistoryMap.get(callKey) || callHistoryMap.get(`${peerId}-${userId}`);
+        if (callId) {
+          updateCallHistory(callId, "MISSED", new Date())
+            .then(() => {
+              callHistoryMap.delete(callKey);
+              callHistoryMap.delete(`${peerId}-${userId}`);
+            })
+            .catch((error) => {
+              fastify.log.error(`Failed to update call history on disconnect: ${error.message}`);
+            });
+        }
+         //---------------------------------------------------
 
         const peerSocketId = onlineUsers.get(peerId);
         if (peerSocketId) {

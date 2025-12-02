@@ -95,6 +95,9 @@ model Message {
   // Soft delete - ADD THIS
   deletedForUsers Int[] @default([])
 
+  // Read status - messages are read by default if user is in conversation room
+  isRead Boolean @default(false)
+
   //relations
   MessageFile MessageFile[]
 

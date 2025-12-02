@@ -33,6 +33,42 @@ export default fp(async (fastify) => {
   const activeCalls = new Map<string, CallData>();
   //---------------------------------------------------
   const callHistoryMap = new Map<string, string>();
+  
+  // Conversation room tracking: Map<conversationId, Set<userId>>
+  const conversationRooms = new Map<string, Set<string>>();
+  
+  // Helper: Check if user is in conversation room
+  const isUserInConversationRoom = (userId: string, conversationId: string): boolean => {
+    const room = conversationRooms.get(conversationId);
+    return room ? room.has(userId) : false;
+  };
+  
+  // Helper: Join conversation room
+  const joinConversationRoom = (userId: string, conversationId: string) => {
+    if (!conversationRooms.has(conversationId)) {
+      conversationRooms.set(conversationId, new Set());
+    }
+    conversationRooms.get(conversationId)!.add(userId);
+    fastify.log.info(`User ${userId} joined conversation room ${conversationId}`);
+  };
+  
+  // Helper: Leave conversation room
+  const leaveConversationRoom = (userId: string, conversationId: string) => {
+    const room = conversationRooms.get(conversationId);
+    if (room) {
+      room.delete(userId);
+      if (room.size === 0) {
+        conversationRooms.delete(conversationId);
+      }
+      fastify.log.info(`User ${userId} left conversation room ${conversationId}`);
+    }
+  };
+  
+  // Helper: Get all users in a conversation room
+  const getUsersInConversationRoom = (conversationId: string): string[] => {
+    const room = conversationRooms.get(conversationId);
+    return room ? Array.from(room) : [];
+  };
 
   // Helper function to save call history
   const saveCallHistory = async (
@@ -170,7 +206,27 @@ export default fp(async (fastify) => {
       socket.emit("online-users", Array.from(onlineUsers.keys()));
     });
 
-    // 4. Call Initiate (A calls B)
+    // 4. Join Conversation Room
+    socket.on("join_conversation", ({ conversationId, userId }: { conversationId: string; userId: string }) => {
+      if (!conversationId || !userId) return;
+
+      joinConversationRoom(userId, conversationId);
+      socket.join(`conversation:${conversationId}`);
+      socket.emit("conversation_joined", { conversationId });
+      fastify.log.info(`Socket ${socket.id}: User ${userId} joined conversation ${conversationId}`);
+    });
+
+    // 5. Leave Conversation Room
+    socket.on("leave_conversation", ({ conversationId, userId }: { conversationId: string; userId: string }) => {
+      if (!conversationId || !userId) return;
+
+      leaveConversationRoom(userId, conversationId);
+      socket.leave(`conversation:${conversationId}`);
+      socket.emit("conversation_left", { conversationId });
+      fastify.log.info(`Socket ${socket.id}: User ${userId} left conversation ${conversationId}`);
+    });
+
+    // 6. Call Initiate (A calls B)
     socket.on(
       "call_initiate",
       async ({
@@ -348,7 +404,7 @@ export default fp(async (fastify) => {
       }
     );
 
-    // 5. Call Accept
+    // 7. Call Accept
     socket.on(
       "call_accept",
       ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
@@ -389,7 +445,7 @@ export default fp(async (fastify) => {
       }
     );
 
-    // 6. WebRTC Offer (SDP Offer)
+    // 8. WebRTC Offer (SDP Offer)
     //---------------------------------------------------
     socket.on(
       "webrtc_offer",
@@ -410,7 +466,7 @@ export default fp(async (fastify) => {
       }
     );
 
-    // 7. WebRTC Answer (SDP Answer)
+    // 9. WebRTC Answer (SDP Answer)
     socket.on(
       "webrtc_answer",
       ({
@@ -430,7 +486,7 @@ export default fp(async (fastify) => {
       }
     );
 
-    // 8. ICE Candidate
+    // 10. ICE Candidate
     socket.on(
       "webrtc_ice",
       ({
@@ -450,7 +506,7 @@ export default fp(async (fastify) => {
       }
     );
 
-    // 9. Call Decline
+    // 11. Call Decline
     socket.on(
       "call_decline",
       ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
@@ -603,10 +659,17 @@ export default fp(async (fastify) => {
     // );
     //---------------------------------------------------
 
-    // 11. Disconnect - Cleanup
+    // 13. Disconnect - Cleanup
     socket.on("disconnect", () => {
       const userId = getUserId();
       if (!userId) return;
+
+      // Remove user from all conversation rooms
+      for (const [conversationId, room] of conversationRooms.entries()) {
+        if (room.has(userId)) {
+          leaveConversationRoom(userId, conversationId);
+        }
+      }
 
       onlineUsers.delete(userId);
 
@@ -651,6 +714,8 @@ export default fp(async (fastify) => {
   fastify.decorate("io", io);
   fastify.decorate("onlineUsers", onlineUsers);
   fastify.decorate("activeCalls", activeCalls);
+  fastify.decorate("isUserInConversationRoom", isUserInConversationRoom);
+  fastify.decorate("getUsersInConversationRoom", getUsersInConversationRoom);
 });
 
 declare module "fastify" {
@@ -658,5 +723,7 @@ declare module "fastify" {
     io: Server;
     onlineUsers: Map<string, string>;
     activeCalls: Map<string, CallData>;
+    isUserInConversationRoom: (userId: string, conversationId: string) => boolean;
+    getUsersInConversationRoom: (conversationId: string) => string[];
   }
 }

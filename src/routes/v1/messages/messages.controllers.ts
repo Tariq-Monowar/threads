@@ -147,6 +147,8 @@ export const sendMessage = async (request, reply) => {
             text: text && text.trim() !== "" ? text : null,
             userId: userIdInt,
             conversationId,
+            // Messages are unread by default, will be marked as read if user is in room
+            isRead: false,
             ...(filesCreate.length
               ? {
                   MessageFile: {
@@ -218,6 +220,26 @@ export const sendMessage = async (request, reply) => {
     setImmediate(async () => {
       try {
         const pushPromises: Promise<any>[] = [];
+        
+        // Check which users are currently in the conversation room
+        const usersInRoom = request.server.getUsersInConversationRoom
+          ? request.server.getUsersInConversationRoom(conversationId)
+          : [];
+        const usersInRoomSet = new Set(usersInRoom.map((id) => parseInt(id)).filter((id) => !isNaN(id)));
+
+        // Mark message as read for users currently in the conversation room (excluding sender)
+        const usersToMarkAsRead = transactionResult.members
+          .filter((member) => member.userId && member.userId !== userIdInt && usersInRoomSet.has(member.userId))
+          .map((member) => member.userId!);
+
+        if (usersToMarkAsRead.length > 0) {
+          await prisma.message.update({
+            where: { id: transactionResult.message.id },
+            data: { isRead: true },
+          }).catch((error) => {
+            request.log.warn(`Failed to mark message as read for users in room: ${error.message}`);
+          });
+        }
 
         for (const member of transactionResult.members) {
           if (member.userId === userIdInt) {

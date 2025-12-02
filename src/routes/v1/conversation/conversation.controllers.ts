@@ -66,7 +66,7 @@ export const getMyConversationsList = async (request, reply) => {
 
     /**
      * Helper: Batch count unread messages for multiple conversations
-     * Counts all messages from other users that aren't deleted for current user
+     * Counts messages from other users that are unread and not deleted for current user
      */
     const batchCountUnreadMessages = async (
       prisma,
@@ -75,12 +75,13 @@ export const getMyConversationsList = async (request, reply) => {
     ) => {
       if (conversationIds.length === 0) return {};
 
-      // Count messages from other users (not deleted for current user)
+      // Count unread messages from other users (not deleted for current user)
       const unreadCounts = await prisma.message.groupBy({
         by: ["conversationId"],
         where: {
           conversationId: { in: conversationIds },
           userId: { not: currentUserId },
+          isRead: false,
           NOT: { deletedForUsers: { has: currentUserId } },
         },
         _count: {
@@ -383,6 +384,7 @@ export const getSingleConversation = async (request, reply) => {
         where: {
           conversationId,
           userId: { not: currentUserId },
+          isRead: false,
           NOT: { deletedForUsers: { has: currentUserId } },
         },
       });

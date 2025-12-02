@@ -707,8 +707,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       success: true,
       conversationId,
       markedBy: myIdInt,
-      markedCount: result.count,
-      messageIds: unreadMessages.map((m) => m.id),
+      // markedCount: result.count,
+      // messageIds: unreadMessages.map((m) => m.id),
+      markedAsRead: true,
     };
 
     console.log("readStatusData", readStatusData);
@@ -726,8 +727,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       message: "Messages marked as read",
       data: {
         conversationId,
-        markedCount: result.count,
-        totalUnreadMessages: unreadMessages.length,
+        markedAsRead: true,
+        // markedCount: result.count,
+        // totalUnreadMessages: unreadMessages.length,
       },
     };
 

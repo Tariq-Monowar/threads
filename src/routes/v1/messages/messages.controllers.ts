@@ -875,13 +875,12 @@ export const markMessageAsDelivered = async (request, reply) => {
         data: {
           conversationId,
           markedBy: myIdInt,
-          // markedCount: result.count,
-          // messageIds: undeliveredMessages.map((m) => m.id),
           isDelivered: true,
         },
       };
 
       members.forEach((member) => {
+        console.log("member", member);
         if (member.userId) {
           request.server.io
             .to(member.userId.toString())

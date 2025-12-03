@@ -895,7 +895,8 @@ export const markMessageAsDelivered = async (request, reply) => {
       message: "Messages marked as delivered",
       data: {
         conversationId,
-        markedAsDelivered: true,
+        isDelivered: true,
+        // : true,
         // markedCount: result.count,
         // totalUndeliveredMessages: undeliveredMessages.length,
       },

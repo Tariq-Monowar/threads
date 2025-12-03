@@ -178,7 +178,7 @@ export default fp(async (fastify) => {
 
     // 2. Typing Indicators (based on conversation rooms)
     socket.on(
-      "typing",
+      "start_typing",
       ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
         if (!conversationId || !userId) return;
 
@@ -194,7 +194,7 @@ export default fp(async (fastify) => {
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
           if (memberUserId !== userId) {
-            io.to(memberUserId).emit("user_typing", {
+            io.to(memberUserId).emit("start_typing", {
               conversationId,
               userId,
               userName,
@@ -222,7 +222,7 @@ export default fp(async (fastify) => {
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
           if (memberUserId !== userId) {
-            io.to(memberUserId).emit("user_stop_typing", {
+            io.to(memberUserId).emit("stop_typing", {
               conversationId,
               userId,
               userName,

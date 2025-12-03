@@ -550,32 +550,37 @@ export default fp(async (fastify) => {
     //   }
     // );
 
-    // 10. Call End
-    // 10. Call End - Fixed version
+    // 12. Call End - Fixed version
     socket.on(
       "call_end",
-      ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
-        const endedByUserId = getUserId(); // কে কল শেষ করছে
+      async ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+        const endedByUserId = getUserId();
         if (!endedByUserId) return;
 
-        // ভেরিফিকেশন: আসলে এই ইউজাররা একে অপরের সাথে কল করছে কিনা
         const callerCall = activeCalls.get(callerId);
         const receiverCall = activeCalls.get(receiverId);
 
-        // শুধুমাত্র ডিলিট করবেন যদি তারা সত্যিই একে অপরের সাথে কল করছে
         if (
           callerCall &&
           callerCall.with === receiverId &&
           receiverCall &&
           receiverCall.with === callerId
         ) {
-           //---------------------------------------------------
           const wasAccepted = callerCall.status === "in_call";
-           //---------------------------------------------------
+          const callType = callerCall.type;
           activeCalls.delete(callerId);
           activeCalls.delete(receiverId);
 
-           //---------------------------------------------------
+          const opponentId = endedByUserId === callerId ? receiverId : callerId;
+          const opponentSocketId = onlineUsers.get(opponentId);
+
+          if (opponentSocketId && opponentSocketId !== socket.id) {
+            io.to(opponentSocketId).emit("call_ended", {
+              endedBy: endedByUserId,
+              reason: "ended_by_user",
+            });
+          }
+
           // Update call history status - COMPLETED if accepted, CANCELED if not
           const callKey = `${callerId}-${receiverId}`;
           const callId = callHistoryMap.get(callKey);
@@ -590,17 +595,90 @@ export default fp(async (fastify) => {
                 fastify.log.error(`Failed to update call history on end: ${error.message}`);
               });
           }
-           //---------------------------------------------------
 
-          // শুধুমাত্র প্রতিপক্ষকে নোটিফাই করুন
-          const opponentId = endedByUserId === callerId ? receiverId : callerId;
-          const opponentSocketId = onlineUsers.get(opponentId);
+          // Send push notification to opponent
+          try {
+            const callerIdNumber = Number(callerId);
+            const receiverIdNumber = Number(receiverId);
+            const opponentIdNumber = Number(opponentId);
 
-          if (opponentSocketId && opponentSocketId !== socket.id) {
-            io.to(opponentSocketId).emit("call_ended", {
-              endedBy: endedByUserId,
-              reason: "ended_by_user",
-            });
+            if (!Number.isNaN(callerIdNumber) && !Number.isNaN(receiverIdNumber)) {
+              const usersData = await prisma.user.findMany({
+                where: {
+                  id: { in: [callerIdNumber, receiverIdNumber] },
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  avatar: true,
+                  fcmToken: true,
+                },
+              });
+
+              const opponentData = usersData.find((u) => u.id === opponentIdNumber);
+              const endedByUserData = usersData.find((u) => u.id === Number(endedByUserId));
+
+              if (opponentData && opponentData.fcmToken && opponentData.fcmToken.length > 0) {
+                const endedByUserInfo = endedByUserData
+                  ? {
+                      id: endedByUserData.id.toString(),
+                      name: endedByUserData.name || `User ${endedByUserId}`,
+                      avatar: FileService.avatarUrl(endedByUserData.avatar || ""),
+                    }
+                  : null;
+
+                const pushData: Record<string, string> = {
+                  type: "call_ended",
+                  endedBy: endedByUserId,
+                  callType: callType,
+                  reason: wasAccepted ? "completed" : "canceled",
+                };
+
+                if (endedByUserInfo) {
+                  pushData.endedByUser = JSON.stringify(endedByUserInfo);
+                }
+
+                const pushPromises: Promise<any>[] = [];
+                const validTokens = opponentData.fcmToken.filter((token): token is string =>
+                  Boolean(token)
+                );
+
+                for (const token of validTokens) {
+                  pushPromises.push(
+                    fastify.sendDataPush(token, pushData).catch((error) => {
+                      fastify.log.warn(
+                        { token, error: error?.message || error },
+                        "Call ended push notification failed"
+                      );
+                      return { success: false, error };
+                    })
+                  );
+                }
+
+                if (pushPromises.length > 0) {
+                  Promise.allSettled(pushPromises)
+                    .then((results) => {
+                      const failed = results.filter(
+                        (result) => result.status === "rejected"
+                      );
+                      if (failed.length > 0) {
+                        fastify.log.warn(
+                          `Call ended push notifications failed for ${failed.length}/${validTokens.length} tokens to ${opponentId}`
+                        );
+                      }
+                    })
+                    .catch((err) => {
+                      fastify.log.error(
+                        `Error handling call ended push promises for ${opponentId}: ${err.message}`
+                      );
+                    });
+                }
+              }
+            }
+          } catch (error: any) {
+            fastify.log.error(
+              `Failed to send call ended push notification: ${error.message}`
+            );
           }
 
           fastify.log.info(

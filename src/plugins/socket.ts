@@ -176,27 +176,59 @@ export default fp(async (fastify) => {
       io.emit("online-users", Array.from(onlineUsers.keys()));
     });
 
-    // 2. Typing Indicators
+    // 2. Typing Indicators (based on conversation rooms)
     socket.on(
       "typing",
-      ({ targetUserId, conversationId, userName, userId }) => {
-        socket.to(targetUserId).emit("user_typing", {
-          conversationId,
-          userId,
-          userName,
-          isTyping: true,
+      ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
+        if (!conversationId || !userId) return;
+
+        // Verify user is in the conversation room
+        if (!isUserInConversationRoom(userId, conversationId)) {
+          fastify.log.warn(`User ${userId} attempted to send typing indicator but is not in conversation ${conversationId}`);
+          return;
+        }
+
+        // Get all users in the conversation room using the conversation room system
+        const usersInRoom = getUsersInConversationRoom(conversationId);
+        
+        // Emit to all members in the conversation room (except sender)
+        usersInRoom.forEach((memberUserId) => {
+          if (memberUserId !== userId) {
+            io.to(memberUserId).emit("user_typing", {
+              conversationId,
+              userId,
+              userName,
+              isTyping: true,
+            });
+          }
         });
       }
     );
 
     socket.on(
       "stop_typing",
-      ({ targetUserId, conversationId, userName, userId }) => {
-        socket.to(targetUserId).emit("user_stop_typing", {
-          conversationId,
-          userId,
-          userName,
-          isTyping: false,
+      ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
+        if (!conversationId || !userId) return;
+
+        // Verify user is in the conversation room
+        if (!isUserInConversationRoom(userId, conversationId)) {
+          fastify.log.warn(`User ${userId} attempted to send stop typing indicator but is not in conversation ${conversationId}`);
+          return;
+        }
+
+        // Get all users in the conversation room using the conversation room system
+        const usersInRoom = getUsersInConversationRoom(conversationId);
+        
+        // Emit to all members in the conversation room (except sender)
+        usersInRoom.forEach((memberUserId) => {
+          if (memberUserId !== userId) {
+            io.to(memberUserId).emit("user_stop_typing", {
+              conversationId,
+              userId,
+              userName,
+              isTyping: false,
+            });
+          }
         });
       }
     );

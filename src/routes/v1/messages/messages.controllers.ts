@@ -223,12 +223,12 @@ export const sendMessage = async (request, reply) => {
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
     
-    // If recipients are in room, mark message as read immediately (before sending response)
+    // If recipients are in room, mark message as read and delivered immediately (before sending response)
     if (recipientsInRoom.length > 0) {
       try {
         messageForResponse = await prisma.message.update({
           where: { id: transactionResult.message.id },
-          data: { isRead: true },
+          data: { isRead: true, isDelivered: true },
           include: {
             user: {
               select: {
@@ -730,6 +730,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         },
         data: {
           isRead: true,
+          isDelivered: true, // If message is read, it must be delivered
         },
       }),
       prisma.conversationMember.findMany({

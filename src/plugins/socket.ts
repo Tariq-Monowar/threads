@@ -210,6 +210,12 @@ export default fp(async (fastify) => {
     socket.on("join_conversation", async ({ conversationId, userId }: { conversationId: string; userId: string }) => {
       if (!conversationId || !userId) return;
 
+      // Verify user is actually connected/online before proceeding
+      if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
+        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but is not properly connected`);
+        return;
+      }
+
       joinConversationRoom(userId, conversationId);
       socket.join(`conversation:${conversationId}`);
       socket.emit("conversation_joined", { conversationId });
@@ -220,6 +226,12 @@ export default fp(async (fastify) => {
         try {
           if (!fastify.prisma) {
             fastify.log.warn("Prisma client not available for marking messages as read");
+            return;
+          }
+
+          // Double-check user is still connected before marking as read
+          if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
+            fastify.log.warn(`User ${userId} disconnected before marking messages as read`);
             return;
           }
 
@@ -247,7 +259,7 @@ export default fp(async (fastify) => {
             return; // No unread messages to mark
           }
 
-          // Update: Only mark messages from other members as read
+          // Update: Only mark messages from other members as read and delivered
           await (fastify.prisma as any).message.updateMany({
             where: {
               conversationId,
@@ -258,6 +270,7 @@ export default fp(async (fastify) => {
             },
             data: {
               isRead: true,
+              isDelivered: true, // If message is read, it must be delivered
             },
           });
 

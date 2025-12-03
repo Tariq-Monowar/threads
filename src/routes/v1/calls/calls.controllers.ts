@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { PrismaClient } from "@prisma/client";
 import { baseUrl, getImageUrl } from "../../../utils/baseurl";
+import { FileService } from "../../../utils/fileService";
 
 interface CallHistoryRequest extends FastifyRequest {
   params: {
@@ -120,14 +121,14 @@ export const getCallHistory = async (
           name: call.caller.name,
           // avatar should with base url
           avatar: call.caller.avatar
-            ? `${getImageUrl(call.caller.avatar)}`
+            ? `${FileService.avatarUrl(call.caller.avatar)}`
             : null,
         },
         receiver: {
           id: call.receiver.id,
           name: call.receiver.name,
           avatar: call.receiver.avatar
-            ? `${getImageUrl(call.receiver.avatar)}`
+            ? `${FileService.avatarUrl(call.receiver.avatar)}`
             : null,
         },
         conversation: call.conversation,

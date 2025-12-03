@@ -101,6 +101,9 @@ model Message {
   //relations
   MessageFile MessageFile[]
 
+  // delivered indicator
+  isDelivered Boolean @default(false)
+
   // System message - for group chat created/deleted/etc.
   isSystemMessage Boolean @default(false)
 

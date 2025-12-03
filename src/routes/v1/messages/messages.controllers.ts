@@ -784,6 +784,133 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
   }
 };
 
+export const markMessageAsDelivered = async (request, reply) => {
+  try {
+    const { conversationId } = request.params;
+    const { myId } = request.body;
+    const prisma = request.server.prisma;
+
+    if (!conversationId || !myId) {
+      return reply.status(400).send({
+        success: false,
+        message: "conversationId and myId are required!",
+      });
+    }
+
+    const myIdInt = parseInt(myId);
+
+    // Ensure the user is part of the conversation
+    const conversationMember = await prisma.conversationMember.findFirst({
+      where: {
+        conversationId,
+        userId: myIdInt,
+        isDeleted: false,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!conversationMember) {
+      return reply.status(403).send({
+        success: false,
+        message: "You don't have access to this conversation",
+      });
+    }
+
+    // Find all undelivered messages in this conversation from OTHER users
+    const undeliveredMessages = await prisma.message.findMany({
+      where: {
+        conversationId,
+        isDelivered: false,
+        NOT: {
+          userId: myIdInt,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (undeliveredMessages.length === 0) {
+      return reply.send({
+        success: true,
+        message: "All messages already marked as delivered",
+        data: {
+          markedCount: 0,
+          totalUndeliveredMessages: 0,
+        },
+      });
+    }
+
+    const [result, members] = await Promise.all([
+      prisma.message.updateMany({
+        where: {
+          conversationId,
+          isDelivered: false,
+          NOT: {
+            userId: myIdInt,
+          },
+        },
+        data: {
+          isDelivered: true,
+        },
+      }),
+      prisma.conversationMember.findMany({
+        where: {
+          conversationId,
+          isDeleted: false,
+        },
+        select: {
+          userId: true,
+        },
+      }),
+    ]);
+
+    // Notify all members in this conversation (especially the sender)
+    try {
+      const payload = {
+        success: true,
+        message: "Messages marked as delivered",
+        data: {
+          conversationId,
+          markedBy: myIdInt,
+          // markedCount: result.count,
+          // messageIds: undeliveredMessages.map((m) => m.id),
+          isDelivered: true,
+        },
+      };
+
+      members.forEach((member) => {
+        if (member.userId) {
+          request.server.io
+            .to(member.userId.toString())
+            .emit("message_delivered", payload);
+        }
+      });
+    } catch (_) {}
+
+    return reply.send({
+      success: true,
+      message: "Messages marked as delivered",
+      data: {
+        conversationId,
+        markedAsDelivered: true,
+        // markedCount: result.count,
+        // totalUndeliveredMessages: undeliveredMessages.length,
+      },
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to mark message as delivered",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+
 export const getMessages = async (request, reply) => {
   try {
     const { conversationId } = request.params;

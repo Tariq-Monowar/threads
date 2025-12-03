@@ -207,13 +207,94 @@ export default fp(async (fastify) => {
     });
 
     // 4. Join Conversation Room
-    socket.on("join_conversation", ({ conversationId, userId }: { conversationId: string; userId: string }) => {
+    socket.on("join_conversation", async ({ conversationId, userId }: { conversationId: string; userId: string }) => {
       if (!conversationId || !userId) return;
 
       joinConversationRoom(userId, conversationId);
       socket.join(`conversation:${conversationId}`);
       socket.emit("conversation_joined", { conversationId });
       fastify.log.info(`Socket ${socket.id}: User ${userId} joined conversation ${conversationId}`);
+
+      // Mark messages from OTHER members as read when user joins (async, non-blocking)
+      setImmediate(async () => {
+        try {
+          if (!fastify.prisma) {
+            fastify.log.warn("Prisma client not available for marking messages as read");
+            return;
+          }
+
+          const userIdInt = parseInt(userId);
+          if (Number.isNaN(userIdInt)) {
+            fastify.log.warn(`Invalid userId for marking messages as read: ${userId}`);
+            return;
+          }
+
+          // Filter: Only find unread messages from OTHER members (NOT from the user who joined)
+          const unreadMessages = await (fastify.prisma as any).message.findMany({
+            where: {
+              conversationId,
+              isRead: false,
+              NOT: {
+                userId: userIdInt, // Critical filter: exclude sender's own messages
+              },
+            },
+            select: {
+              id: true,
+            },
+          });
+
+          if (unreadMessages.length === 0) {
+            return; // No unread messages to mark
+          }
+
+          // Update: Only mark messages from other members as read
+          await (fastify.prisma as any).message.updateMany({
+            where: {
+              conversationId,
+              isRead: false,
+              NOT: {
+                userId: userIdInt, // Critical filter: only messages from other members
+              },
+            },
+            data: {
+              isRead: true,
+            },
+          });
+
+          // Get all conversation members to notify them
+          const members = await fastify.prisma.conversationMember.findMany({
+            where: {
+              conversationId,
+              isDeleted: false,
+            },
+            select: {
+              userId: true,
+            },
+          });
+
+          // Emit to all members using consistent event format
+          const readStatusData = {
+            success: true,
+            conversationId,
+            markedBy: userIdInt,
+            markedAsRead: true,
+          };
+
+          members.forEach((member) => {
+            if (member.userId) {
+              io.to(member.userId.toString()).emit("messages_marked_read", readStatusData);
+            }
+          });
+
+          fastify.log.info(
+            `Marked ${unreadMessages.length} messages as read for user ${userId} in conversation ${conversationId}`
+          );
+        } catch (error: any) {
+          fastify.log.error(
+            `Failed to mark messages as read on join: ${error.message}`
+          );
+        }
+      });
     });
 
     // 5. Leave Conversation Room

@@ -206,8 +206,49 @@ export const sendMessage = async (request, reply) => {
     conversationName
     */
 
+    // Check which users are currently in the conversation room
+    const usersInRoom = request.server.getUsersInConversationRoom
+      ? request.server.getUsersInConversationRoom(conversationId)
+      : [];
+    const usersInRoomSet = new Set(usersInRoom.map((id) => parseInt(id)).filter((id) => !isNaN(id)));
+
+    // Filter: Only mark as read if recipients (NOT sender) are in the room
+    const recipientsInRoom = transactionResult.members.filter(
+      (member) => 
+        member.userId && 
+        member.userId !== userIdInt && 
+        usersInRoomSet.has(member.userId)
+    );
+
+    let messageForResponse = transactionResult.message;
+    let wasMarkedAsRead = false;
+    
+    // If recipients are in room, mark message as read immediately (before sending response)
+    if (recipientsInRoom.length > 0) {
+      try {
+        messageForResponse = await prisma.message.update({
+          where: { id: transactionResult.message.id },
+          data: { isRead: true },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+            MessageFile: true,
+          },
+        });
+        wasMarkedAsRead = true;
+      } catch (error: any) {
+        request.log.warn(`Failed to mark message as read synchronously: ${error.message}`);
+      }
+    }
+
     const transformedMessage = transformMessage(
-      transactionResult.message,
+      messageForResponse,
       participantIds
     );
 
@@ -220,24 +261,23 @@ export const sendMessage = async (request, reply) => {
     setImmediate(async () => {
       try {
         const pushPromises: Promise<any>[] = [];
-        
-        // Check which users are currently in the conversation room
-        const usersInRoom = request.server.getUsersInConversationRoom
-          ? request.server.getUsersInConversationRoom(conversationId)
-          : [];
-        const usersInRoomSet = new Set(usersInRoom.map((id) => parseInt(id)).filter((id) => !isNaN(id)));
 
-        // Mark message as read for users currently in the conversation room (excluding sender)
-        const usersToMarkAsRead = transactionResult.members
-          .filter((member) => member.userId && member.userId !== userIdInt && usersInRoomSet.has(member.userId))
-          .map((member) => member.userId!);
+        // If message was marked as read, emit real-time update using existing event
+        if (wasMarkedAsRead && messageForResponse.isRead) {
+          const readStatusData = {
+            success: true,
+            conversationId,
+            markedBy: userIdInt,
+            markedAsRead: true,
+          };
 
-        if (usersToMarkAsRead.length > 0) {
-          await prisma.message.update({
-            where: { id: transactionResult.message.id },
-            data: { isRead: true },
-          }).catch((error) => {
-            request.log.warn(`Failed to mark message as read for users in room: ${error.message}`);
+          // Emit to all conversation members using existing event format
+          transactionResult.members.forEach((member) => {
+            if (member.userId) {
+              request.server.io
+                .to(member.userId.toString())
+                .emit("messages_marked_read", readStatusData);
+            }
           });
         }
 

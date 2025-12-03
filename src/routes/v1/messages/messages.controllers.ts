@@ -755,8 +755,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
 
     console.log("readStatusData", readStatusData);
 
+    // Emit to other members only (exclude the user who made the API call)
     members.forEach((member) => {
-      if (member.userId) {
+      if (member.userId && member.userId !== myIdInt) {
         request.server.io
           .to(member.userId.toString())
           .emit("messages_marked_read", readStatusData);
@@ -880,9 +881,9 @@ export const markMessageAsDelivered = async (request, reply) => {
         },
       };
 
+      // Emit to other members only (exclude the user who made the API call)
       members.forEach((member) => {
-        console.log("member", member);
-        if (member.userId) {
+        if (member.userId && member.userId !== myIdInt) {
           request.server.io
             .to(member.userId.toString())
             .emit("message_delivered", payload);

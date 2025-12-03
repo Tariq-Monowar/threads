@@ -317,7 +317,7 @@ export default fp(async (fastify) => {
             },
           });
 
-          // Emit to all members using consistent event format
+          // Emit to other members only (exclude the user who joined)
           const readStatusData = {
             success: true,
             conversationId,
@@ -326,7 +326,7 @@ export default fp(async (fastify) => {
           };
 
           members.forEach((member) => {
-            if (member.userId) {
+            if (member.userId && member.userId !== userIdInt) {
               io.to(member.userId.toString()).emit("messages_marked_read", readStatusData);
             }
           });

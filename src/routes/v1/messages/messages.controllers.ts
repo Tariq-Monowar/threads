@@ -208,6 +208,7 @@ export const sendMessage = async (request, reply) => {
     */
 
     // Check which users are currently in the conversation room
+    // This is critical for marking messages as read/delivered when users are active in the room
     const usersInRoom = request.server.getUsersInConversationRoom
       ? request.server.getUsersInConversationRoom(conversationId)
       : [];
@@ -216,26 +217,34 @@ export const sendMessage = async (request, reply) => {
     // getUsersInConversationRoom returns string[], so we need to parse them
     const usersInRoomNumbers = usersInRoom
       .map((id) => {
-        const numId = typeof id === "string" ? parseInt(id, 10) : id;
+        const numId = typeof id === "string" ? parseInt(id, 10) : Number(id);
         return isNaN(numId) ? null : numId;
       })
       .filter((id): id is number => id !== null);
     
     const usersInRoomSet = new Set(usersInRoomNumbers);
     
+    // Get all member IDs for comparison
+    const allMemberIds = transactionResult.members
+      .map((m) => m.userId)
+      .filter((id): id is number => typeof id === "number");
+    
     request.log.info(
-      `Users in room ${conversationId}: ${usersInRoomNumbers.join(", ")}, Sender: ${userIdInt}`
+      `🔍 Room Check - Conversation: ${conversationId}, Sender: ${userIdInt}, Users in room (raw): [${usersInRoom.join(", ")}], Users in room (parsed): [${usersInRoomNumbers.join(", ")}], All members: [${allMemberIds.join(", ")}]`
     );
 
     // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room
     // When multiple people are in the same conversation room, messages should be marked as delivered and read
-    const recipientsInRoom = transactionResult.members.filter(
-      (member) => 
-        member.userId !== null &&
-        member.userId !== undefined &&
-        member.userId !== userIdInt && 
-        usersInRoomSet.has(member.userId)
-    );
+    const recipientsInRoom = transactionResult.members.filter((member) => {
+      if (!member.userId || member.userId === userIdInt) {
+        return false;
+      }
+      const isInRoom = usersInRoomSet.has(member.userId);
+      if (isInRoom) {
+        request.log.info(`✅ Recipient ${member.userId} is in room ${conversationId}`);
+      }
+      return isInRoom;
+    });
 
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
@@ -250,11 +259,12 @@ export const sendMessage = async (request, reply) => {
         .filter((id): id is number => typeof id === "number");
       
       request.log.info(
-        `Recipients in room for message ${transactionResult.message.id}: ${recipientsInRoomIds.join(", ")}`
+        `📨 Marking message ${transactionResult.message.id} as read/delivered for ${recipientsInRoomIds.length} recipients in room: [${recipientsInRoomIds.join(", ")}]`
       );
       
       try {
-        messageForResponse = await prisma.message.update({
+        // Update message to mark as read and delivered
+        const updateResult = await prisma.message.update({
           where: { id: transactionResult.message.id },
           data: { 
             isRead: true, 
@@ -274,25 +284,29 @@ export const sendMessage = async (request, reply) => {
         });
         
         // Verify that the update was successful
-        if (messageForResponse.isRead === true && messageForResponse.isDelivered === true) {
+        if (updateResult.isRead === true && updateResult.isDelivered === true) {
+          messageForResponse = updateResult;
           wasMarkedAsRead = true;
           request.log.info(
-            ` Message ${transactionResult.message.id} marked as read/delivered for ${recipientsInRoomIds.length} recipients in room: ${recipientsInRoomIds.join(", ")}`
+            `✅ SUCCESS: Message ${transactionResult.message.id} marked as read/delivered. isRead=${updateResult.isRead}, isDelivered=${updateResult.isDelivered}`
           );
         } else {
           request.log.error(
-            ` Message update failed: isRead=${messageForResponse.isRead}, isDelivered=${messageForResponse.isDelivered}`
+            `❌ FAILED: Message update did not set flags correctly. Expected: isRead=true, isDelivered=true. Got: isRead=${updateResult.isRead}, isDelivered=${updateResult.isDelivered}`
           );
+          messageForResponse = updateResult; // Still use updated result even if flags are wrong
         }
       } catch (error: any) {
-        request.log.error(` Failed to mark message as read synchronously: ${error.message}`, error);
+        request.log.error(`❌ ERROR: Failed to mark message as read synchronously: ${error.message}`, error);
+        request.log.error(`Error stack: ${error.stack}`);
         // Keep original message if update fails
         messageForResponse = transactionResult.message;
       }
     } else {
-      request.log.info(
-        ` No recipients in room for message ${transactionResult.message.id}. Users in room: ${usersInRoomNumbers.join(", ")}, All members: ${participantIds.join(", ")}`
+      request.log.warn(
+        `⚠️ No recipients in room for message ${transactionResult.message.id}. Users in room: [${usersInRoomNumbers.join(", ")}], All members: [${participantIds.join(", ")}], Sender: ${userIdInt}`
       );
+      // Message will remain unread/undelivered
     }
 
     const transformedMessage = transformMessage(
@@ -302,7 +316,7 @@ export const sendMessage = async (request, reply) => {
 
     // Log final message status for debugging
     request.log.info(
-      `📤 Sending message response: id=${transformedMessage.id}, isRead=${transformedMessage.isRead}, isDelivered=${transformedMessage.isDelivered}, recipientsInRoom=${recipientsInRoomIds.length > 0 ? recipientsInRoomIds.join(", ") : "none"}`
+      `📤 Final response - Message ID: ${transformedMessage.id}, isRead: ${transformedMessage.isRead}, isDelivered: ${transformedMessage.isDelivered}, wasMarkedAsRead: ${wasMarkedAsRead}, recipientsInRoom: ${recipientsInRoomIds.length > 0 ? `[${recipientsInRoomIds.join(", ")}]` : "none"}`
     );
 
     const response = {
@@ -388,13 +402,32 @@ export const sendMessage = async (request, reply) => {
             // Add all push promises to array for parallel execution
             for (const token of validTokens) {
               pushPromises.push(
-                request.server.sendDataPush(token, pushData).catch((error) => {
-                  request.log.warn(
-                    { token, error: error?.message || error },
-                    "Push notification failed"
-                  );
-                  return { success: false, error };
-                })
+                request.server.sendDataPush(token, pushData)
+                  .then((result) => {
+                    // If token is invalid, we should remove it from user's fcmToken array
+                    if (!result.success && result.shouldRemoveToken && member.userId) {
+                      request.log.info(`Removing invalid FCM token for user ${member.userId}`);
+                      // Remove invalid token asynchronously (non-blocking)
+                      prisma.user.update({
+                        where: { id: member.userId },
+                        data: {
+                          fcmToken: {
+                            set: validTokens.filter((t) => t !== token),
+                          },
+                        },
+                      }).catch((err) => {
+                        request.log.error(`Failed to remove invalid token for user ${member.userId}: ${err.message}`);
+                      });
+                    }
+                    return result;
+                  })
+                  .catch((error) => {
+                    request.log.warn(
+                      { token, error: error?.message || error },
+                      "Push notification failed"
+                    );
+                    return { success: false, error: error?.message || "Unknown error" };
+                  })
               );
             }
           }

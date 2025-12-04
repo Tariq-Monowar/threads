@@ -48,8 +48,15 @@ export default fp(async (fastify) => {
     if (!conversationRooms.has(conversationId)) {
       conversationRooms.set(conversationId, new Set());
     }
-    conversationRooms.get(conversationId)!.add(userId);
-    fastify.log.info(`User ${userId} joined conversation room ${conversationId}`);
+    const room = conversationRooms.get(conversationId)!;
+    const wasAlreadyInRoom = room.has(userId);
+    room.add(userId);
+    
+    if (!wasAlreadyInRoom) {
+      fastify.log.info(`➕ User ${userId} joined conversation room ${conversationId}. Room now has ${room.size} user(s)`);
+    } else {
+      fastify.log.debug(`User ${userId} already in conversation room ${conversationId}`);
+    }
   };
   
   // Helper: Leave conversation room
@@ -67,7 +74,9 @@ export default fp(async (fastify) => {
   // Helper: Get all users in a conversation room
   const getUsersInConversationRoom = (conversationId: string): string[] => {
     const room = conversationRooms.get(conversationId);
-    return room ? Array.from(room) : [];
+    const users = room ? Array.from(room) : [];
+    fastify.log.debug(`Room ${conversationId} has ${users.length} user(s): [${users.join(", ")}]`);
+    return users;
   };
 
   // Helper function to save call history
@@ -240,18 +249,26 @@ export default fp(async (fastify) => {
 
     // 4. Join Conversation Room
     socket.on("join_conversation", async ({ conversationId, userId }: { conversationId: string; userId: string }) => {
-      if (!conversationId || !userId) return;
-
-      // Verify user is actually connected/online before proceeding
-      if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
-        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but is not properly connected`);
+      if (!conversationId || !userId) {
+        fastify.log.warn(`Invalid join_conversation request: conversationId=${conversationId}, userId=${userId}`);
         return;
       }
 
+      // Verify user is actually connected/online before proceeding
+      if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
+        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but is not properly connected. Online users: [${Array.from(onlineUsers.keys()).join(", ")}]`);
+        return;
+      }
+
+      // Join the conversation room
       joinConversationRoom(userId, conversationId);
       socket.join(`conversation:${conversationId}`);
-      socket.emit("conversation_joined", { conversationId });
-      fastify.log.info(`Socket ${socket.id}: User ${userId} joined conversation ${conversationId}`);
+      
+      // Verify join was successful
+      const usersInRoom = getUsersInConversationRoom(conversationId);
+      fastify.log.info(`✅ User ${userId} joined conversation ${conversationId}. Total users in room: ${usersInRoom.length} [${usersInRoom.join(", ")}]`);
+      
+      socket.emit("conversation_joined", { conversationId, userId });
 
       // Mark messages from OTHER members as read when user joins (async, non-blocking)
       setImmediate(async () => {

@@ -57,8 +57,31 @@ export default fp(async (fastify) => {
         })
         return { success: true, messageId }
       } catch (error: any) {
+        // Handle specific Firebase errors
+        const errorCode = error?.code || error?.errorInfo?.code
+        
+        // Invalid token errors - don't log as error, just return failure
+        if (
+          errorCode === "messaging/registration-token-not-registered" ||
+          errorCode === "messaging/invalid-registration-token" ||
+          errorCode === "messaging/invalid-argument"
+        ) {
+          // Token is invalid/expired - silently fail (token should be removed from DB)
+          return { 
+            success: false, 
+            error: "Invalid or expired token",
+            code: errorCode,
+            shouldRemoveToken: true
+          }
+        }
+        
+        // Other errors - log but don't throw
         console.error("Push error:", error)
-        return { success: false, error: error?.message || "Failed to send push notification" }
+        return { 
+          success: false, 
+          error: error?.message || "Failed to send push notification",
+          code: errorCode
+        }
       }
     }
   )

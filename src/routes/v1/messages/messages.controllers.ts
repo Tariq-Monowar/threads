@@ -212,7 +212,8 @@ export const sendMessage = async (request, reply) => {
       : [];
     const usersInRoomSet = new Set(usersInRoom.map((id) => parseInt(id)).filter((id) => !isNaN(id)));
 
-    // Filter: Only mark as read if recipients (NOT sender) are in the room
+    // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room
+    // When multiple people are in the same conversation room, messages should be marked as delivered and read
     const recipientsInRoom = transactionResult.members.filter(
       (member) => 
         member.userId && 
@@ -222,13 +223,23 @@ export const sendMessage = async (request, reply) => {
 
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
+    let recipientsInRoomIds: number[] = [];
     
     // If recipients are in room, mark message as read and delivered immediately (before sending response)
+    // This ensures that when multiple people are in the same conversation room,
+    // isDelivered and isRead are set to true automatically
     if (recipientsInRoom.length > 0) {
+      recipientsInRoomIds = recipientsInRoom
+        .map((m) => m.userId)
+        .filter((id): id is number => typeof id === "number");
+      
       try {
         messageForResponse = await prisma.message.update({
           where: { id: transactionResult.message.id },
-          data: { isRead: true, isDelivered: true },
+          data: { 
+            isRead: true, 
+            isDelivered: true 
+          },
           include: {
             user: {
               select: {
@@ -242,6 +253,9 @@ export const sendMessage = async (request, reply) => {
           },
         });
         wasMarkedAsRead = true;
+        request.log.info(
+          `Message ${transactionResult.message.id} marked as read/delivered for ${recipientsInRoomIds.length} recipients in room: ${recipientsInRoomIds.join(", ")}`
+        );
       } catch (error: any) {
         request.log.warn(`Failed to mark message as read synchronously: ${error.message}`);
       }
@@ -262,21 +276,39 @@ export const sendMessage = async (request, reply) => {
       try {
         const pushPromises: Promise<any>[] = [];
 
-        // If message was marked as read, emit real-time update using existing event
-        if (wasMarkedAsRead && messageForResponse.isRead) {
+        // If message was marked as read/delivered (because recipients are in conversation room),
+        // emit real-time updates to notify all members
+        if (wasMarkedAsRead && messageForResponse.isRead && messageForResponse.isDelivered) {
+          // Emit read status update
           const readStatusData = {
             success: true,
             conversationId,
             markedBy: userIdInt,
             markedAsRead: true,
+            messageId: messageForResponse.id,
+            recipientsInRoom: recipientsInRoomIds,
           };
 
-          // Emit to all conversation members using existing event format
+          // Emit delivered status update
+          const deliveredStatusData = {
+            success: true,
+            conversationId,
+            markedBy: userIdInt,
+            isDelivered: true,
+            messageId: messageForResponse.id,
+            recipientsInRoom: recipientsInRoomIds,
+          };
+
+          // Emit to all conversation members to notify about read/delivered status
           transactionResult.members.forEach((member) => {
             if (member.userId) {
               request.server.io
                 .to(member.userId.toString())
                 .emit("messages_marked_read", readStatusData);
+              
+              request.server.io
+                .to(member.userId.toString())
+                .emit("message_delivered", deliveredStatusData);
             }
           });
         }

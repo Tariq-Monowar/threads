@@ -209,7 +209,7 @@ export default fp(async (fastify) => {
       "start_typing",
       ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
         if (!conversationId || !userId) return;
-
+        console.log("start_typing", conversationId, userId, userName);
         // Verify user is in the conversation room
         if (!isUserInConversationRoom(userId, conversationId)) {
           fastify.log.warn(`User ${userId} attempted to send typing indicator but is not in conversation ${conversationId}`);
@@ -237,7 +237,7 @@ export default fp(async (fastify) => {
       "stop_typing",
       ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
         if (!conversationId || !userId) return;
-
+      console.log("stop_typing", conversationId, userId, userName);
         // Verify user is in the conversation room
         if (!isUserInConversationRoom(userId, conversationId)) {
           fastify.log.warn(`User ${userId} attempted to send stop typing indicator but is not in conversation ${conversationId}`);

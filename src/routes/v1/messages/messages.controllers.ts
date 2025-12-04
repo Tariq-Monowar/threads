@@ -147,8 +147,9 @@ export const sendMessage = async (request, reply) => {
             text: text && text.trim() !== "" ? text : null,
             userId: userIdInt,
             conversationId,
-            // Messages are unread by default, will be marked as read if user is in room
+            // Messages are unread and undelivered by default, will be marked as read/delivered if recipients are in room
             isRead: false,
+            isDelivered: false,
             ...(filesCreate.length
               ? {
                   MessageFile: {
@@ -210,13 +211,28 @@ export const sendMessage = async (request, reply) => {
     const usersInRoom = request.server.getUsersInConversationRoom
       ? request.server.getUsersInConversationRoom(conversationId)
       : [];
-    const usersInRoomSet = new Set(usersInRoom.map((id) => parseInt(id)).filter((id) => !isNaN(id)));
+    
+    // Convert room user IDs to numbers for comparison
+    // getUsersInConversationRoom returns string[], so we need to parse them
+    const usersInRoomNumbers = usersInRoom
+      .map((id) => {
+        const numId = typeof id === "string" ? parseInt(id, 10) : id;
+        return isNaN(numId) ? null : numId;
+      })
+      .filter((id): id is number => id !== null);
+    
+    const usersInRoomSet = new Set(usersInRoomNumbers);
+    
+    request.log.info(
+      `Users in room ${conversationId}: ${usersInRoomNumbers.join(", ")}, Sender: ${userIdInt}`
+    );
 
     // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room
     // When multiple people are in the same conversation room, messages should be marked as delivered and read
     const recipientsInRoom = transactionResult.members.filter(
       (member) => 
-        member.userId && 
+        member.userId !== null &&
+        member.userId !== undefined &&
         member.userId !== userIdInt && 
         usersInRoomSet.has(member.userId)
     );
@@ -232,6 +248,10 @@ export const sendMessage = async (request, reply) => {
       recipientsInRoomIds = recipientsInRoom
         .map((m) => m.userId)
         .filter((id): id is number => typeof id === "number");
+      
+      request.log.info(
+        `Recipients in room for message ${transactionResult.message.id}: ${recipientsInRoomIds.join(", ")}`
+      );
       
       try {
         messageForResponse = await prisma.message.update({
@@ -252,18 +272,37 @@ export const sendMessage = async (request, reply) => {
             MessageFile: true,
           },
         });
-        wasMarkedAsRead = true;
-        request.log.info(
-          `Message ${transactionResult.message.id} marked as read/delivered for ${recipientsInRoomIds.length} recipients in room: ${recipientsInRoomIds.join(", ")}`
-        );
+        
+        // Verify that the update was successful
+        if (messageForResponse.isRead === true && messageForResponse.isDelivered === true) {
+          wasMarkedAsRead = true;
+          request.log.info(
+            ` Message ${transactionResult.message.id} marked as read/delivered for ${recipientsInRoomIds.length} recipients in room: ${recipientsInRoomIds.join(", ")}`
+          );
+        } else {
+          request.log.error(
+            ` Message update failed: isRead=${messageForResponse.isRead}, isDelivered=${messageForResponse.isDelivered}`
+          );
+        }
       } catch (error: any) {
-        request.log.warn(`Failed to mark message as read synchronously: ${error.message}`);
+        request.log.error(` Failed to mark message as read synchronously: ${error.message}`, error);
+        // Keep original message if update fails
+        messageForResponse = transactionResult.message;
       }
+    } else {
+      request.log.info(
+        ` No recipients in room for message ${transactionResult.message.id}. Users in room: ${usersInRoomNumbers.join(", ")}, All members: ${participantIds.join(", ")}`
+      );
     }
 
     const transformedMessage = transformMessage(
       messageForResponse,
       participantIds
+    );
+
+    // Log final message status for debugging
+    request.log.info(
+      `📤 Sending message response: id=${transformedMessage.id}, isRead=${transformedMessage.isRead}, isDelivered=${transformedMessage.isDelivered}, recipientsInRoom=${recipientsInRoomIds.length > 0 ? recipientsInRoomIds.join(", ") : "none"}`
     );
 
     const response = {

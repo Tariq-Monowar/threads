@@ -29,7 +29,9 @@ export default fp(async (fastify) => {
   });
 
   //state
-  const onlineUsers = new Map<string, string>();
+  // Support multiple sockets per user (multiple tabs, reconnects)
+  // Map<userId, Set<socketId>>
+  const onlineUsers = new Map<string, Set<string>>();
   const activeCalls = new Map<string, CallData>();
   //---------------------------------------------------
   const callHistoryMap = new Map<string, string>();
@@ -166,10 +168,11 @@ export default fp(async (fastify) => {
 
     fastify.log.info(`New socket connected: ${socket.id}`);
 
-    // Helper: Get userId from socket (we'll set it on join)
-    const getUserId = () => {
-      for (const [userId, sid] of onlineUsers.entries()) {
-        if (sid === socket.id) return userId;
+    // Helper: Get userId from socket (supports multiple sockets per user)
+    const getUserId = (): string | null => {
+      for (const [userId, socketIds] of onlineUsers.entries()) {
+        const socketSet: Set<string> = socketIds;
+        if (socketSet.has(socket.id)) return userId;
       }
       return null;
     };
@@ -178,9 +181,16 @@ export default fp(async (fastify) => {
     socket.on("join", (userId: string) => {
       if (!userId) return;
 
-      onlineUsers.set(userId, socket.id);
+      // Add socket.id to user's socket set (supports multiple tabs/sockets)
+      if (!onlineUsers.has(userId)) {
+        onlineUsers.set(userId, new Set<string>());
+      }
+      const userSocketSet: Set<string> = onlineUsers.get(userId)!;
+      userSocketSet.add(socket.id);
       socket.join(userId);
-      fastify.log.info(`User joined: ${userId}`);
+      
+      const socketCount: number = userSocketSet.size;
+      fastify.log.info(`User joined: ${userId} (socket: ${socket.id}, total sockets: ${socketCount})`);
 
       io.emit("online-users", Array.from(onlineUsers.keys()));
     });
@@ -255,8 +265,11 @@ export default fp(async (fastify) => {
       }
 
       // Verify user is actually connected/online before proceeding
-      if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
-        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but is not properly connected. Online users: [${Array.from(onlineUsers.keys()).join(", ")}]`);
+      // Check if user has any active sockets (supports multiple tabs)
+      const userSockets: Set<string> | undefined = onlineUsers.get(userId);
+      if (!userSockets || !userSockets.has(socket.id)) {
+        const socketCount: number = userSockets?.size || 0;
+        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but socket ${socket.id} is not registered. User has ${socketCount} active socket(s). Online users: [${Array.from(onlineUsers.keys()).join(", ")}]`);
         return;
       }
 
@@ -279,7 +292,8 @@ export default fp(async (fastify) => {
           }
 
           // Double-check user is still connected before marking as read
-          if (!onlineUsers.has(userId) || onlineUsers.get(userId) !== socket.id) {
+          const userSockets: Set<string> | undefined = onlineUsers.get(userId);
+          if (!userSockets || !userSockets.has(socket.id)) {
             fastify.log.warn(`User ${userId} disconnected before marking messages as read`);
             return;
           }
@@ -531,9 +545,11 @@ export default fp(async (fastify) => {
         }
          //---------------------------------------------------
 
-        const receiverSocketId = onlineUsers.get(receiverId);
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("call_incoming", {
+        // Emit to all sockets of the receiver (supports multiple tabs)
+        const receiverSockets: Set<string> | undefined = onlineUsers.get(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          // Use userId room to emit to all sockets of that user
+          io.to(receiverId).emit("call_incoming", {
             callerId,
             callType,
             callerInfo: {
@@ -576,9 +592,10 @@ export default fp(async (fastify) => {
         }
          //---------------------------------------------------
 
-        const callerSocketId = onlineUsers.get(callerIdLocal);
-        if (callerSocketId) {
-          io.to(callerSocketId).emit("call_accepted", {
+        // Emit to all sockets of the caller
+        const callerSockets = onlineUsers.get(callerIdLocal);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerIdLocal).emit("call_accepted", {
             receiverId: calleeId,
             callType: callData.type,
           });
@@ -602,9 +619,10 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        const targetSocketId = onlineUsers.get(receiverId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit("webrtc_offer", { senderId, sdp });
+        // Emit to all sockets of the receiver
+        const receiverSockets = onlineUsers.get(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
         }
       }
     );
@@ -622,9 +640,10 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !callerId) return;
 
-        const targetSocketId = onlineUsers.get(callerId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit("webrtc_answer", { callerId, sdp });
+        // Emit to all sockets of the caller
+        const callerSockets: Set<string> | undefined = onlineUsers.get(callerId);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("webrtc_answer", { callerId, sdp });
         }
       }
     );
@@ -642,9 +661,10 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        const targetSocketId = onlineUsers.get(receiverId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit("webrtc_ice", { senderId, candidate });
+        // Emit to all sockets of the receiver
+        const receiverSockets = onlineUsers.get(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          io.to(receiverId).emit("webrtc_ice", { senderId, candidate });
         }
       }
     );
@@ -672,9 +692,10 @@ export default fp(async (fastify) => {
         }
          //---------------------------------------------------
 
-        const callerSocketId = onlineUsers.get(callerId);
-        if (callerSocketId) {
-          io.to(callerSocketId).emit("call_declined", { receiverId });
+        // Emit to all sockets of the caller
+        const callerSockets: Set<string> | undefined = onlineUsers.get(callerId);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("call_declined", { receiverId });
         }
       }
     );
@@ -715,10 +736,11 @@ export default fp(async (fastify) => {
           activeCalls.delete(receiverId);
 
           const opponentId = endedByUserId === callerId ? receiverId : callerId;
-          const opponentSocketId = onlineUsers.get(opponentId);
-
-          if (opponentSocketId && opponentSocketId !== socket.id) {
-            io.to(opponentSocketId).emit("call_ended", {
+          // Emit to all sockets of the opponent (except the current socket)
+          const opponentSockets: Set<string> | undefined = onlineUsers.get(opponentId);
+          if (opponentSockets && opponentSockets.size > 0) {
+            // Emit to userId room, which will reach all sockets of that user
+            io.to(opponentId).emit("call_ended", {
               endedBy: endedByUserId,
               reason: "ended_by_user",
             });
@@ -883,16 +905,31 @@ export default fp(async (fastify) => {
     // 13. Disconnect - Cleanup
     socket.on("disconnect", () => {
       const userId = getUserId();
-      if (!userId) return;
-
-      // Remove user from all conversation rooms
-      for (const [conversationId, room] of conversationRooms.entries()) {
-        if (room.has(userId)) {
-          leaveConversationRoom(userId, conversationId);
-        }
+      if (!userId) {
+        fastify.log.info(`Socket ${socket.id} disconnected (no userId found)`);
+        return;
       }
 
-      onlineUsers.delete(userId);
+      // Remove this specific socket from user's socket set
+      const userSockets: Set<string> | undefined = onlineUsers.get(userId);
+      if (userSockets) {
+        userSockets.delete(socket.id);
+        const remainingCount: number = userSockets.size;
+        fastify.log.info(`Socket ${socket.id} removed from user ${userId}. Remaining sockets: ${remainingCount}`);
+        
+        // Only remove user from conversation rooms if this was their last socket
+        if (remainingCount === 0) {
+          // Remove user from all conversation rooms
+          for (const [conversationId, room] of conversationRooms.entries()) {
+            if (room.has(userId)) {
+              leaveConversationRoom(userId, conversationId);
+            }
+          }
+          // Remove user from onlineUsers completely
+          onlineUsers.delete(userId);
+          fastify.log.info(`User ${userId} fully disconnected (no remaining sockets)`);
+        }
+      }
 
       if (activeCalls.has(userId)) {
         const call = activeCalls.get(userId)!;
@@ -917,9 +954,10 @@ export default fp(async (fastify) => {
         }
          //---------------------------------------------------
 
-        const peerSocketId = onlineUsers.get(peerId);
-        if (peerSocketId) {
-          io.to(peerSocketId).emit("call_ended", {
+        // Emit to all sockets of the peer
+        const peerSockets: Set<string> | undefined = onlineUsers.get(peerId);
+        if (peerSockets && peerSockets.size > 0) {
+          io.to(peerId).emit("call_ended", {
             senderId: userId,
             reason: "disconnected",
           });
@@ -942,7 +980,7 @@ export default fp(async (fastify) => {
 declare module "fastify" {
   interface FastifyInstance {
     io: Server;
-    onlineUsers: Map<string, string>;
+    onlineUsers: Map<string, Set<string>>; // Map<userId, Set<socketId>> - supports multiple sockets per user
     activeCalls: Map<string, CallData>;
     isUserInConversationRoom: (userId: string, conversationId: string) => boolean;
     getUsersInConversationRoom: (conversationId: string) => string[];

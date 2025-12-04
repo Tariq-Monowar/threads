@@ -77,7 +77,8 @@ export default fp(async (fastify) => {
   const getUsersInConversationRoom = (conversationId: string): string[] => {
     const room = conversationRooms.get(conversationId);
     const users = room ? Array.from(room) : [];
-    fastify.log.debug(`Room ${conversationId} has ${users.length} user(s): [${users.join(", ")}]`);
+    // Log at info level for debugging room issues
+    fastify.log.info(`🔍 Room ${conversationId} has ${users.length} user(s): [${users.join(", ")}]`);
     return users;
   };
 
@@ -179,18 +180,26 @@ export default fp(async (fastify) => {
 
     // 1. User Join
     socket.on("join", (userId: string) => {
-      if (!userId) return;
+      if (!userId) {
+        fastify.log.warn(`Invalid join event: userId is empty, socket: ${socket.id}`);
+        return;
+      }
 
       // Add socket.id to user's socket set (supports multiple tabs/sockets)
       if (!onlineUsers.has(userId)) {
         onlineUsers.set(userId, new Set<string>());
       }
       const userSocketSet: Set<string> = onlineUsers.get(userId)!;
+      const wasAlreadyAdded = userSocketSet.has(socket.id);
       userSocketSet.add(socket.id);
       socket.join(userId);
       
       const socketCount: number = userSocketSet.size;
-      fastify.log.info(`User joined: ${userId} (socket: ${socket.id}, total sockets: ${socketCount})`);
+      if (wasAlreadyAdded) {
+        fastify.log.debug(`User ${userId} socket ${socket.id} already registered (total sockets: ${socketCount})`);
+      } else {
+        fastify.log.info(`✅ User ${userId} joined with socket ${socket.id} (total sockets: ${socketCount})`);
+      }
 
       io.emit("online-users", Array.from(onlineUsers.keys()));
     });
@@ -264,22 +273,30 @@ export default fp(async (fastify) => {
         return;
       }
 
-      // Verify user is actually connected/online before proceeding
-      // Check if user has any active sockets (supports multiple tabs)
+      // Check if user is online (has any active sockets)
       const userSockets: Set<string> | undefined = onlineUsers.get(userId);
-      if (!userSockets || !userSockets.has(socket.id)) {
-        const socketCount: number = userSockets?.size || 0;
-        fastify.log.warn(`User ${userId} attempted to join conversation ${conversationId} but socket ${socket.id} is not registered. User has ${socketCount} active socket(s). Online users: [${Array.from(onlineUsers.keys()).join(", ")}]`);
-        return;
+      
+      // If user is not in onlineUsers, they need to call "join" event first
+      if (!userSockets || userSockets.size === 0) {
+        fastify.log.warn(`⚠️ User ${userId} attempted to join conversation ${conversationId} but is not online. User must call "join" event first. Online users: [${Array.from(onlineUsers.keys()).join(", ")}]`);
+        // Still allow them to join the room (they might be connecting)
+        // But log a warning
+      } else if (!userSockets.has(socket.id)) {
+        // User is online but this specific socket is not registered
+        // This can happen with multiple tabs - we'll still allow the join
+        fastify.log.info(`ℹ️ User ${userId} joining conversation ${conversationId} with socket ${socket.id} (not in user's socket set, but user is online with ${userSockets.size} socket(s))`);
+        // Add this socket to user's set
+        userSockets.add(socket.id);
+        socket.join(userId);
       }
 
-      // Join the conversation room
+      // Join the conversation room (always allow, even if socket wasn't registered)
       joinConversationRoom(userId, conversationId);
       socket.join(`conversation:${conversationId}`);
       
       // Verify join was successful
       const usersInRoom = getUsersInConversationRoom(conversationId);
-      fastify.log.info(`✅ User ${userId} joined conversation ${conversationId}. Total users in room: ${usersInRoom.length} [${usersInRoom.join(", ")}]`);
+      fastify.log.info(`✅ User ${userId} (socket: ${socket.id}) joined conversation ${conversationId}. Total users in room: ${usersInRoom.length} [${usersInRoom.join(", ")}]`);
       
       socket.emit("conversation_joined", { conversationId, userId });
 

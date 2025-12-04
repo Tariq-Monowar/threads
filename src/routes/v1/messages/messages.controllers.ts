@@ -222,6 +222,16 @@ export const sendMessage = async (request, reply) => {
       })
       .filter((id): id is number => id !== null);
     
+    // Also check which users are online (even if not in room)
+    const onlineUsersMap = request.server.onlineUsers || new Map();
+    const onlineUserIds: number[] = [];
+    for (const [userIdStr, socketSet] of onlineUsersMap.entries()) {
+      const userIdNum = parseInt(userIdStr, 10);
+      if (!isNaN(userIdNum) && socketSet && socketSet.size > 0) {
+        onlineUserIds.push(userIdNum);
+      }
+    }
+    
     const usersInRoomSet = new Set(usersInRoomNumbers);
     
     // Get all member IDs for comparison
@@ -230,7 +240,7 @@ export const sendMessage = async (request, reply) => {
       .filter((id): id is number => typeof id === "number");
     
     request.log.info(
-      `🔍 Room Check - Conversation: ${conversationId}, Sender: ${userIdInt}, Users in room (raw): [${usersInRoom.join(", ")}], Users in room (parsed): [${usersInRoomNumbers.join(", ")}], All members: [${allMemberIds.join(", ")}]`
+      `🔍 Room Check - Conversation: ${conversationId}, Sender: ${userIdInt}, Users in room: [${usersInRoomNumbers.join(", ")}], Online users: [${onlineUserIds.join(", ")}], All members: [${allMemberIds.join(", ")}]`
     );
 
     // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room

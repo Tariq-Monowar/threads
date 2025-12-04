@@ -42,7 +42,15 @@ export default fp(async (fastify) => {
   // Helper: Check if user is in conversation room
   const isUserInConversationRoom = (userId: string, conversationId: string): boolean => {
     const room = conversationRooms.get(conversationId);
-    return room ? room.has(userId) : false;
+    if (!room) {
+      fastify.log.debug(`Room ${conversationId} does not exist`);
+      return false;
+    }
+    const isInRoom = room.has(userId);
+    if (!isInRoom) {
+      fastify.log.debug(`User ${userId} not in room ${conversationId}. Room has: [${Array.from(room).join(", ")}]`);
+    }
+    return isInRoom;
   };
   
   // Helper: Join conversation room
@@ -207,24 +215,42 @@ export default fp(async (fastify) => {
     // 2. Typing Indicators (based on conversation rooms)
     socket.on(
       "start_typing",
-      ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
-        if (!conversationId || !userId) return;
-        console.log("start_typing", conversationId, userId, userName);
+      ({ conversationId, userId, userName }: { conversationId: string; userId?: string; userName?: string }) => {
+        if (!conversationId) {
+          fastify.log.warn(`Invalid start_typing: missing conversationId`);
+          return;
+        }
+
+        // Get userId from socket (more secure than trusting client)
+        const actualUserId = userId || getUserId();
+        if (!actualUserId) {
+          fastify.log.warn(`Invalid start_typing: userId not found for socket ${socket.id}`);
+          return;
+        }
+
+        const userIdStr = actualUserId.toString();
+        fastify.log.debug(`start_typing: conversationId=${conversationId}, userId=${userIdStr}, socket=${socket.id}`);
+
         // Verify user is in the conversation room
-        if (!isUserInConversationRoom(userId, conversationId)) {
-          fastify.log.warn(`User ${userId} attempted to send typing indicator but is not in conversation ${conversationId}`);
+        if (!isUserInConversationRoom(userIdStr, conversationId)) {
+          const usersInRoom = getUsersInConversationRoom(conversationId);
+          fastify.log.warn(
+            `User ${userIdStr} attempted to send typing indicator but is not in conversation ${conversationId}. ` +
+            `Users in room: [${usersInRoom.join(", ")}], Socket userId: ${actualUserId}`
+          );
           return;
         }
 
         // Get all users in the conversation room using the conversation room system
         const usersInRoom = getUsersInConversationRoom(conversationId);
+        fastify.log.debug(`Typing indicator: User ${userIdStr} typing in ${conversationId}, room has ${usersInRoom.length} user(s)`);
         
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
-          if (memberUserId !== userId) {
+          if (memberUserId !== userIdStr) {
             io.to(memberUserId).emit("start_typing", {
               conversationId,
-              userId,
+              userId: userIdStr,
               userName,
               isTyping: true,
             });
@@ -235,24 +261,42 @@ export default fp(async (fastify) => {
 
     socket.on(
       "stop_typing",
-      ({ conversationId, userId, userName }: { conversationId: string; userId: string; userName?: string }) => {
-        if (!conversationId || !userId) return;
-      console.log("stop_typing", conversationId, userId, userName);
+      ({ conversationId, userId, userName }: { conversationId: string; userId?: string; userName?: string }) => {
+        if (!conversationId) {
+          fastify.log.warn(`Invalid stop_typing: missing conversationId`);
+          return;
+        }
+
+        // Get userId from socket (more secure than trusting client)
+        const actualUserId = userId || getUserId();
+        if (!actualUserId) {
+          fastify.log.warn(`Invalid stop_typing: userId not found for socket ${socket.id}`);
+          return;
+        }
+
+        const userIdStr = actualUserId.toString();
+        fastify.log.debug(`stop_typing: conversationId=${conversationId}, userId=${userIdStr}, socket=${socket.id}`);
+
         // Verify user is in the conversation room
-        if (!isUserInConversationRoom(userId, conversationId)) {
-          fastify.log.warn(`User ${userId} attempted to send stop typing indicator but is not in conversation ${conversationId}`);
+        if (!isUserInConversationRoom(userIdStr, conversationId)) {
+          const usersInRoom = getUsersInConversationRoom(conversationId);
+          fastify.log.warn(
+            `User ${userIdStr} attempted to send stop typing indicator but is not in conversation ${conversationId}. ` +
+            `Users in room: [${usersInRoom.join(", ")}], Socket userId: ${actualUserId}`
+          );
           return;
         }
 
         // Get all users in the conversation room using the conversation room system
         const usersInRoom = getUsersInConversationRoom(conversationId);
+        fastify.log.debug(`Stop typing indicator: User ${userIdStr} stopped typing in ${conversationId}, room has ${usersInRoom.length} user(s)`);
         
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
-          if (memberUserId !== userId) {
+          if (memberUserId !== userIdStr) {
             io.to(memberUserId).emit("stop_typing", {
               conversationId,
-              userId,
+              userId: userIdStr,
               userName,
               isTyping: false,
             });
@@ -290,15 +334,23 @@ export default fp(async (fastify) => {
         socket.join(userId);
       }
 
+      // Ensure userId is a string for consistency
+      const userIdStr = userId.toString();
+      
       // Join the conversation room (always allow, even if socket wasn't registered)
-      joinConversationRoom(userId, conversationId);
+      joinConversationRoom(userIdStr, conversationId);
       socket.join(`conversation:${conversationId}`);
       
       // Verify join was successful
       const usersInRoom = getUsersInConversationRoom(conversationId);
-      fastify.log.info(`✅ User ${userId} (socket: ${socket.id}) joined conversation ${conversationId}. Total users in room: ${usersInRoom.length} [${usersInRoom.join(", ")}]`);
+      const isInRoom = isUserInConversationRoom(userIdStr, conversationId);
+      fastify.log.info(
+        `✅ User ${userIdStr} (socket: ${socket.id}) joined conversation ${conversationId}. ` +
+        `Total users in room: ${usersInRoom.length} [${usersInRoom.join(", ")}], ` +
+        `Verification: ${isInRoom ? "CONFIRMED" : "FAILED"}`
+      );
       
-      socket.emit("conversation_joined", { conversationId, userId });
+      socket.emit("conversation_joined", { conversationId, userId: userIdStr });
 
       // Mark messages from OTHER members as read when user joins (async, non-blocking)
       setImmediate(async () => {

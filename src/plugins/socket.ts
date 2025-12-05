@@ -974,7 +974,9 @@ export default fp(async (fastify) => {
 
     // New event: Flush buffered ICE candidates (called by client after setting remote description)
     socket.on("webrtc_ice_flush", ({ peerId }: { peerId: string }) => {
+      console.log("webrtc_ice_flush", peerId);
       const userId = getUserId();
+      console.log("userId", userId);
       if (!userId || !peerId) return;
 
       const bufferKey = `${userId}-${peerId}`;

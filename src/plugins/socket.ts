@@ -13,7 +13,6 @@ interface CallData {
   type: CallType;
 }
 
-// ICE candidate buffer interface
 interface ICECandidateBuffer {
   candidate: RTCIceCandidate;
   timestamp: number;
@@ -276,7 +275,7 @@ export default fp(async (fastify) => {
         );
       } else {
         fastify.log.info(
-          `✅ User ${userId} joined with socket ${socket.id} (total sockets: ${socketCount})`
+          ` User ${userId} joined with socket ${socket.id} (total sockets: ${socketCount})`
         );
       }
 
@@ -446,7 +445,7 @@ export default fp(async (fastify) => {
           // User is online but this specific socket is not registered
           // This can happen with multiple tabs - we'll still allow the join
           fastify.log.info(
-            `ℹ️ User ${userId} joining conversation ${conversationId} with socket ${socket.id} (not in user's socket set, but user is online with ${userSockets.size} socket(s))`
+            ` User ${userId} joining conversation ${conversationId} with socket ${socket.id} (not in user's socket set, but user is online with ${userSockets.size} socket(s))`
           );
           // Add this socket to user's set
           userSockets.add(socket.id);
@@ -464,7 +463,7 @@ export default fp(async (fastify) => {
         const usersInRoom = getUsersInConversationRoom(conversationId);
         const isInRoom = isUserInConversationRoom(userIdStr, conversationId);
         fastify.log.info(
-          `✅ User ${userIdStr} (socket: ${socket.id}) joined conversation ${conversationId}. ` +
+          ` User ${userIdStr} (socket: ${socket.id}) joined conversation ${conversationId}. ` +
             `Total users in room: ${usersInRoom.length} [${usersInRoom.join(
               ", "
             )}], ` +
@@ -836,23 +835,35 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        fastify.log.info(`📤 WebRTC Offer from ${senderId} to ${receiverId}`);
+        fastify.log.info(`WebRTC Offer from ${senderId} to ${receiverId}`);
 
-        // When offer is sent, clear any buffered ICE candidates for this direction
-        // The receiver will buffer new candidates until they process this offer
-        const bufferKey = `${receiverId}-${senderId}`;
-        const existingBuffer = iceCandidateBuffers.get(bufferKey);
-        if (existingBuffer && existingBuffer.length > 0) {
-          fastify.log.info(
-            `🗑️ Clearing ${existingBuffer.length} old ICE candidates for ${bufferKey}`
-          );
-          iceCandidateBuffers.delete(bufferKey);
-        }
-
-        // Emit to all sockets of the receiver
+        // Emit offer first to the receiver
         const receiverSockets = onlineUsers.get(receiverId);
         if (receiverSockets && receiverSockets.size > 0) {
           io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
+
+          // After sending the offer, flush any buffered ICE candidates from sender to receiver
+          // These are candidates that arrived before the receiver set the remote description
+          // Buffer key format: receiverId-senderId (candidates from sender to receiver)
+          const bufferKey = `${receiverId}-${senderId}`;
+          const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
+
+          if (bufferedCandidates && bufferedCandidates.length > 0) {
+            fastify.log.info(
+              `Flushing ${bufferedCandidates.length} buffered ICE candidates from ${senderId} to ${receiverId} after offer`
+            );
+
+            // Send all buffered candidates to the receiver
+            bufferedCandidates.forEach((item) => {
+              io.to(receiverId).emit("webrtc_ice", {
+                senderId,
+                candidate: item.candidate,
+              });
+            });
+
+            // Clear the buffer after flushing
+            iceCandidateBuffers.delete(bufferKey);
+          }
         }
       }
     );
@@ -870,7 +881,7 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !callerId) return;
 
-        fastify.log.info(`📥 WebRTC Answer from ${senderId} to ${callerId}`);
+        fastify.log.info(`WebRTC Answer from ${senderId} to ${callerId}`);
 
         // When answer is sent, send any buffered ICE candidates to the caller
         const bufferKey = `${callerId}-${senderId}`;
@@ -885,7 +896,7 @@ export default fp(async (fastify) => {
           // Then send buffered ICE candidates if any
           if (bufferedCandidates && bufferedCandidates.length > 0) {
             fastify.log.info(
-              `📦 Flushing ${bufferedCandidates.length} buffered ICE candidates to ${callerId}`
+              `Flushing ${bufferedCandidates.length} buffered ICE candidates to ${callerId}`
             );
 
             bufferedCandidates.forEach((item) => {
@@ -926,7 +937,7 @@ export default fp(async (fastify) => {
           receiverCall.with !== senderId
         ) {
           fastify.log.warn(
-            `⚠️ ICE candidate from ${senderId} to ${receiverId} but no active call`
+            ` ICE candidate from ${senderId} to ${receiverId} but no active call`
           );
           return;
         }
@@ -934,25 +945,13 @@ export default fp(async (fastify) => {
         const receiverSockets = onlineUsers.get(receiverId);
         if (!receiverSockets || receiverSockets.size === 0) {
           fastify.log.warn(
-            `⚠️ ICE candidate from ${senderId} to ${receiverId} but receiver offline`
+            ` ICE candidate from ${senderId} to ${receiverId} but receiver offline`
           );
           return;
         }
 
-        // Buffer ICE candidate instead of sending immediately
-        // This prevents race condition where candidates arrive before remote description
-        const buffer = getIceCandidateBuffer(receiverId, senderId);
-        buffer.push({
-          candidate,
-          timestamp: Date.now(),
-        });
-
-        fastify.log.debug(
-          `🧊 Buffered ICE candidate from ${senderId} to ${receiverId} (buffer size: ${buffer.length})`
-        );
-
         // If call is already in "in_call" status, it means SDP exchange is complete
-        // So we can send the candidate immediately
+        // So we can send the candidate immediately without buffering
         if (
           senderCall.status === "in_call" &&
           receiverCall.status === "in_call"
@@ -961,12 +960,17 @@ export default fp(async (fastify) => {
             `✅ Call in progress, sending ICE candidate immediately to ${receiverId}`
           );
           io.to(receiverId).emit("webrtc_ice", { senderId, candidate });
-
-          // Remove from buffer since we sent it
-          buffer.pop();
         } else {
+          // Buffer ICE candidate instead of sending immediately
+          // This prevents race condition where candidates arrive before remote description
+          const buffer = getIceCandidateBuffer(receiverId, senderId);
+          buffer.push({
+            candidate,
+            timestamp: Date.now(),
+          });
+
           fastify.log.debug(
-            `⏳ Call still connecting, ICE candidate buffered for ${receiverId}`
+            `⏳ Call still connecting, ICE candidate buffered for ${receiverId} (buffer size: ${buffer.length})`
           );
         }
       }
@@ -984,7 +988,7 @@ export default fp(async (fastify) => {
 
       if (bufferedCandidates && bufferedCandidates.length > 0) {
         fastify.log.info(
-          `🚀 Client ${userId} requested flush of ${bufferedCandidates.length} ICE candidates from ${peerId}`
+          ` Client ${userId} requested flush of ${bufferedCandidates.length} ICE candidates from ${peerId}`
         );
 
         // Send all buffered candidates
@@ -997,7 +1001,7 @@ export default fp(async (fastify) => {
 
         // Clear the buffer
         iceCandidateBuffers.delete(bufferKey);
-        fastify.log.info(`✅ Flushed and cleared ICE buffer for ${bufferKey}`);
+        fastify.log.info(` Flushed and cleared ICE buffer for ${bufferKey}`);
       } else {
         fastify.log.debug(`No buffered ICE candidates for ${bufferKey}`);
       }

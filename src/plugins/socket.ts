@@ -1,22 +1,16 @@
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
+import { saveCallHistory, updateCallHistory } from "../utils/callHistory";
 import { FileService } from "../utils/fileService";
+import { createOnlineUsersStore } from "../utils/onlineUsers";
+import { createConversationRoomsStore } from "../utils/conversationRooms";
+import {
+  createCallState,
+  CallType,
+  CallData,
+} from "../utils/callState";
 const prisma = new PrismaClient();
-
-type CallType = "audio" | "video";
-type CallStatus = "calling" | "in_call";
-
-interface CallData {
-  with: string;
-  status: CallStatus;
-  type: CallType;
-}
-
-interface ICECandidateBuffer {
-  candidate: RTCIceCandidate;
-  timestamp: number;
-}
 
 export default fp(async (fastify) => {
   const io = new Server(fastify.server, {
@@ -33,200 +27,33 @@ export default fp(async (fastify) => {
     },
   });
 
-  //state
-  // Support multiple sockets per user (multiple tabs, reconnects)
-  // Map<userId, Set<socketId>>
-  const onlineUsers = new Map<string, Set<string>>();
-  const activeCalls = new Map<string, CallData>();
-  //---------------------------------------------------
-  const callHistoryMap = new Map<string, string>();
+  const {
+    onlineUsers,
+    addSocket,
+    removeSocket,
+    getUserIdBySocket,
+    getSocketsForUser,
+    getOnlineUserIds,
+  } = createOnlineUsersStore();
 
-  // Conversation room tracking: Map<conversationId, Set<userId>>
-  const conversationRooms = new Map<string, Set<string>>();
+  const {
+    conversationRooms,
+    joinConversationRoom,
+    leaveConversationRoom,
+    isUserInConversationRoom,
+    getUsersInConversationRoom,
+  } = createConversationRoomsStore();
 
-  // ICE candidate buffering: Map<"userId-peerId", ICECandidateBuffer[]>
-  // This prevents race condition where ICE candidates arrive before remote description
-  const iceCandidateBuffers = new Map<string, ICECandidateBuffer[]>();
-
-  // Helper: Get or create ICE buffer
-  const getIceCandidateBuffer = (
-    userId: string,
-    peerId: string
-  ): ICECandidateBuffer[] => {
-    const key = `${userId}-${peerId}`;
-    if (!iceCandidateBuffers.has(key)) {
-      iceCandidateBuffers.set(key, []);
-    }
-    return iceCandidateBuffers.get(key)!;
-  };
-
-  // Helper: Clear ICE buffer
-  const clearIceCandidateBuffer = (userId: string, peerId: string) => {
-    const key = `${userId}-${peerId}`;
-    iceCandidateBuffers.delete(key);
-    // Also clear reverse direction
-    const reverseKey = `${peerId}-${userId}`;
-    iceCandidateBuffers.delete(reverseKey);
-  };
-
-  // Helper: Cleanup old ICE candidates (older than 30 seconds)
-  const cleanupOldIceCandidates = () => {
-    const now = Date.now();
-    const maxAge = 30000; // 30 seconds
-
-    for (const [key, buffer] of iceCandidateBuffers.entries()) {
-      const filtered = buffer.filter((item) => now - item.timestamp < maxAge);
-      if (filtered.length === 0) {
-        iceCandidateBuffers.delete(key);
-      } else if (filtered.length !== buffer.length) {
-        iceCandidateBuffers.set(key, filtered);
-      }
-    }
-  };
-
-  // Cleanup old ICE candidates every 10 seconds
-  setInterval(cleanupOldIceCandidates, 10000);
-
-  // Helper: Check if user is in conversation room
-  const isUserInConversationRoom = (
-    userId: string,
-    conversationId: string
-  ): boolean => {
-    const room = conversationRooms.get(conversationId);
-    if (!room) {
-      fastify.log.debug(`Room ${conversationId} does not exist`);
-      return false;
-    }
-    const isInRoom = room.has(userId);
-    if (!isInRoom) {
-      fastify.log.debug(
-        `User ${userId} not in room ${conversationId}. Room has: [${Array.from(
-          room
-        ).join(", ")}]`
-      );
-    }
-    return isInRoom;
-  };
-
-  // Helper: Join conversation room
-  const joinConversationRoom = (userId: string, conversationId: string) => {
-    if (!conversationRooms.has(conversationId)) {
-      conversationRooms.set(conversationId, new Set());
-    }
-    const room = conversationRooms.get(conversationId)!;
-    const wasAlreadyInRoom = room.has(userId);
-    room.add(userId);
-
-    if (!wasAlreadyInRoom) {
-      fastify.log.info(
-        `➕ User ${userId} joined conversation room ${conversationId}. Room now has ${room.size} user(s)`
-      );
-    } else {
-      fastify.log.debug(
-        `User ${userId} already in conversation room ${conversationId}`
-      );
-    }
-  };
-
-  // Helper: Leave conversation room
-  const leaveConversationRoom = (userId: string, conversationId: string) => {
-    const room = conversationRooms.get(conversationId);
-    if (room) {
-      room.delete(userId);
-      if (room.size === 0) {
-        conversationRooms.delete(conversationId);
-      }
-      fastify.log.info(
-        `User ${userId} left conversation room ${conversationId}`
-      );
-    }
-  };
-
-  // Helper: Get all users in a conversation room
-  const getUsersInConversationRoom = (conversationId: string): string[] => {
-    const room = conversationRooms.get(conversationId);
-    const users = room ? Array.from(room) : [];
-    // Log at info level for debugging room issues
-    fastify.log.info(
-      `🔍 Room ${conversationId} has ${users.length} user(s): [${users.join(
-        ", "
-      )}]`
-    );
-    return users;
-  };
-
-  // Helper function to save call history
-  const saveCallHistory = async (
-    callerId: number,
-    receiverId: number,
-    type: "AUDIO" | "VIDEO",
-    status: "ONGOING" | "COMPLETED" | "MISSED" | "DECLINED" | "CANCELED",
-    conversationId?: string,
-    startedAt?: Date,
-    endedAt?: Date
-  ): Promise<string | null> => {
-    try {
-      if (!fastify.prisma) {
-        fastify.log.warn("Prisma client not available for call history");
-        return null;
-      }
-
-      const callData: any = {
-        callerId,
-        receiverId,
-        type,
-        status,
-        participantIds: [],
-      };
-
-      if (conversationId) {
-        callData.conversationId = conversationId;
-      }
-
-      if (startedAt) {
-        callData.startedAt = startedAt;
-      }
-
-      if (endedAt) {
-        callData.endedAt = endedAt;
-      }
-
-      const call = await (fastify.prisma as any).call.create({
-        data: callData,
-      });
-
-      return call.id;
-    } catch (error: any) {
-      fastify.log.error(`Failed to save call history: ${error.message}`);
-      return null;
-    }
-  };
-
-  // Helper function to update call history
-  const updateCallHistory = async (
-    callId: string,
-    status: "ONGOING" | "COMPLETED" | "MISSED" | "DECLINED" | "CANCELED",
-    endedAt?: Date
-  ): Promise<void> => {
-    try {
-      if (!fastify.prisma) {
-        return;
-      }
-
-      const updateData: any = { status };
-      if (endedAt) {
-        updateData.endedAt = endedAt;
-      }
-
-      await (fastify.prisma as any).call.update({
-        where: { id: callId },
-        data: updateData,
-      });
-    } catch (error: any) {
-      fastify.log.error(`Failed to update call history: ${error.message}`);
-    }
-  };
-  //---------------------------------------------------
+  const {
+    activeCalls,
+    callHistoryMap,
+    iceCandidateBuffers,
+    getIceCandidateBuffer,
+    clearIceCandidateBuffer,
+    setCallHistoryForPair,
+    getCallHistoryForPair,
+    clearCallHistoryForPair,
+  } = createCallState();
 
   io.on("connection", (socket) => {
     // // TURN/STUN server configuration
@@ -239,47 +66,19 @@ export default fp(async (fastify) => {
     //   },
     // ];
 
-    fastify.log.info(`New socket connected: ${socket.id}`);
-
     // Helper: Get userId from socket (supports multiple sockets per user)
-    const getUserId = (): string | null => {
-      for (const [userId, socketIds] of onlineUsers.entries()) {
-        const socketSet: Set<string> = socketIds;
-        if (socketSet.has(socket.id)) return userId;
-      }
-      return null;
-    };
+    const getUserId = (): string | null => getUserIdBySocket(socket.id);
 
     // 1. User Join
     socket.on("join", (userId: string) => {
       if (!userId) {
-        fastify.log.warn(
-          `Invalid join event: userId is empty, socket: ${socket.id}`
-        );
         return;
       }
 
-      // Add socket.id to user's socket set (supports multiple tabs/sockets)
-      if (!onlineUsers.has(userId)) {
-        onlineUsers.set(userId, new Set<string>());
-      }
-      const userSocketSet: Set<string> = onlineUsers.get(userId)!;
-      const wasAlreadyAdded = userSocketSet.has(socket.id);
-      userSocketSet.add(socket.id);
+      addSocket(userId, socket.id);
       socket.join(userId);
 
-      const socketCount: number = userSocketSet.size;
-      if (wasAlreadyAdded) {
-        fastify.log.debug(
-          `User ${userId} socket ${socket.id} already registered (total sockets: ${socketCount})`
-        );
-      } else {
-        fastify.log.info(
-          ` User ${userId} joined with socket ${socket.id} (total sockets: ${socketCount})`
-        );
-      }
-
-      io.emit("online-users", Array.from(onlineUsers.keys()));
+      io.emit("online-users", getOnlineUserIds());
     });
 
     // 2. Typing Indicators (based on conversation rooms)
@@ -295,41 +94,25 @@ export default fp(async (fastify) => {
         userName?: string;
       }) => {
         if (!conversationId) {
-          fastify.log.warn(`Invalid start_typing: missing conversationId`);
           return;
         }
 
         // Get userId from socket (more secure than trusting client)
         const actualUserId = userId || getUserId();
         if (!actualUserId) {
-          fastify.log.warn(
-            `Invalid start_typing: userId not found for socket ${socket.id}`
-          );
           return;
         }
 
         const userIdStr = actualUserId.toString();
-        fastify.log.debug(
-          `start_typing: conversationId=${conversationId}, userId=${userIdStr}, socket=${socket.id}`
-        );
 
         // Verify user is in the conversation room
         if (!isUserInConversationRoom(userIdStr, conversationId)) {
           const usersInRoom = getUsersInConversationRoom(conversationId);
-          fastify.log.warn(
-            `User ${userIdStr} attempted to send typing indicator but is not in conversation ${conversationId}. ` +
-              `Users in room: [${usersInRoom.join(
-                ", "
-              )}], Socket userId: ${actualUserId}`
-          );
           return;
         }
 
         // Get all users in the conversation room using the conversation room system
         const usersInRoom = getUsersInConversationRoom(conversationId);
-        fastify.log.debug(
-          `Typing indicator: User ${userIdStr} typing in ${conversationId}, room has ${usersInRoom.length} user(s)`
-        );
 
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
@@ -357,41 +140,25 @@ export default fp(async (fastify) => {
         userName?: string;
       }) => {
         if (!conversationId) {
-          fastify.log.warn(`Invalid stop_typing: missing conversationId`);
           return;
         }
 
         // Get userId from socket (more secure than trusting client)
         const actualUserId = userId || getUserId();
         if (!actualUserId) {
-          fastify.log.warn(
-            `Invalid stop_typing: userId not found for socket ${socket.id}`
-          );
           return;
         }
 
         const userIdStr = actualUserId.toString();
-        fastify.log.debug(
-          `stop_typing: conversationId=${conversationId}, userId=${userIdStr}, socket=${socket.id}`
-        );
 
         // Verify user is in the conversation room
         if (!isUserInConversationRoom(userIdStr, conversationId)) {
           const usersInRoom = getUsersInConversationRoom(conversationId);
-          fastify.log.warn(
-            `User ${userIdStr} attempted to send stop typing indicator but is not in conversation ${conversationId}. ` +
-              `Users in room: [${usersInRoom.join(
-                ", "
-              )}], Socket userId: ${actualUserId}`
-          );
           return;
         }
 
         // Get all users in the conversation room using the conversation room system
         const usersInRoom = getUsersInConversationRoom(conversationId);
-        fastify.log.debug(
-          `Stop typing indicator: User ${userIdStr} stopped typing in ${conversationId}, room has ${usersInRoom.length} user(s)`
-        );
 
         // Emit to all members in the conversation room (except sender)
         usersInRoom.forEach((memberUserId) => {
@@ -409,7 +176,7 @@ export default fp(async (fastify) => {
 
     // 3. Get online users
     socket.on("get_online_users", () => {
-      socket.emit("online-users", Array.from(onlineUsers.keys()));
+      socket.emit("online-users", getOnlineUserIds());
     });
 
     // 4. Join Conversation Room
@@ -423,30 +190,19 @@ export default fp(async (fastify) => {
         userId: string;
       }) => {
         if (!conversationId || !userId) {
-          fastify.log.warn(
-            `Invalid join_conversation request: conversationId=${conversationId}, userId=${userId}`
-          );
           return;
         }
 
         // Check if user is online (has any active sockets)
-        const userSockets: Set<string> | undefined = onlineUsers.get(userId);
+        const userSockets = getSocketsForUser(userId);
 
         // If user is not in onlineUsers, they need to call "join" event first
         if (!userSockets || userSockets.size === 0) {
-          fastify.log.warn(
-            `⚠️ User ${userId} attempted to join conversation ${conversationId} but is not online. User must call "join" event first. Online users: [${Array.from(
-              onlineUsers.keys()
-            ).join(", ")}]`
-          );
           // Still allow them to join the room (they might be connecting)
           // But log a warning
         } else if (!userSockets.has(socket.id)) {
           // User is online but this specific socket is not registered
           // This can happen with multiple tabs - we'll still allow the join
-          fastify.log.info(
-            ` User ${userId} joining conversation ${conversationId} with socket ${socket.id} (not in user's socket set, but user is online with ${userSockets.size} socket(s))`
-          );
           // Add this socket to user's set
           userSockets.add(socket.id);
           socket.join(userId);
@@ -462,13 +218,6 @@ export default fp(async (fastify) => {
         // Verify join was successful
         const usersInRoom = getUsersInConversationRoom(conversationId);
         const isInRoom = isUserInConversationRoom(userIdStr, conversationId);
-        fastify.log.info(
-          ` User ${userIdStr} (socket: ${socket.id}) joined conversation ${conversationId}. ` +
-            `Total users in room: ${usersInRoom.length} [${usersInRoom.join(
-              ", "
-            )}], ` +
-            `Verification: ${isInRoom ? "CONFIRMED" : "FAILED"}`
-        );
 
         socket.emit("conversation_joined", {
           conversationId,
@@ -479,27 +228,17 @@ export default fp(async (fastify) => {
         setImmediate(async () => {
           try {
             if (!fastify.prisma) {
-              fastify.log.warn(
-                "Prisma client not available for marking messages as read"
-              );
               return;
             }
 
             // Double-check user is still connected before marking as read
-            const userSockets: Set<string> | undefined =
-              onlineUsers.get(userId);
+            const userSockets = getSocketsForUser(userId);
             if (!userSockets || !userSockets.has(socket.id)) {
-              fastify.log.warn(
-                `User ${userId} disconnected before marking messages as read`
-              );
               return;
             }
 
             const userIdInt = parseInt(userId);
             if (Number.isNaN(userIdInt)) {
-              fastify.log.warn(
-                `Invalid userId for marking messages as read: ${userId}`
-              );
               return;
             }
 
@@ -565,14 +304,7 @@ export default fp(async (fastify) => {
                 );
               }
             });
-
-            fastify.log.info(
-              `Marked ${unreadMessages.length} messages as read for user ${userId} in conversation ${conversationId}`
-            );
           } catch (error: any) {
-            fastify.log.error(
-              `Failed to mark messages as read on join: ${error.message}`
-            );
           }
         });
       }
@@ -593,9 +325,6 @@ export default fp(async (fastify) => {
         leaveConversationRoom(userId, conversationId);
         socket.leave(`conversation:${conversationId}`);
         socket.emit("conversation_left", { conversationId });
-        fastify.log.info(
-          `Socket ${socket.id}: User ${userId} left conversation ${conversationId}`
-        );
       }
     );
 
@@ -632,9 +361,6 @@ export default fp(async (fastify) => {
 
         if (Number.isNaN(callerIdNumber) || Number.isNaN(receiverIdNumber)) {
           socket.emit("call_failed", { message: "Invalid user id" });
-          fastify.log.warn(
-            `Call aborted: non-numeric ids caller=${callerId} receiver=${receiverId}`
-          );
           return;
         }
 
@@ -652,9 +378,6 @@ export default fp(async (fastify) => {
             },
           });
         } catch (error: any) {
-          fastify.log.error(
-            `Failed to fetch caller info for ${callerId}: ${error.message}`
-          );
           socket.emit("call_failed", {
             message: "Failed to retrieve user info",
           });
@@ -700,10 +423,6 @@ export default fp(async (fastify) => {
             for (const token of validTokens) {
               pushPromises.push(
                 fastify.sendDataPush(token, pushData).catch((error) => {
-                  fastify.log.warn(
-                    { token, error: error?.message || error },
-                    "Call push notification failed"
-                  );
                   return { success: false, error };
                 })
               );
@@ -711,22 +430,7 @@ export default fp(async (fastify) => {
 
             // Execute all push promises in parallel
             if (pushPromises.length > 0) {
-              Promise.allSettled(pushPromises)
-                .then((results) => {
-                  const failed = results.filter(
-                    (result) => result.status === "rejected"
-                  );
-                  if (failed.length > 0) {
-                    fastify.log.warn(
-                      `Call push notifications failed for ${failed.length}/${validTokens.length} tokens to ${receiverId}`
-                    );
-                  }
-                })
-                .catch((err) => {
-                  fastify.log.error(
-                    `Error handling call push promises for ${receiverId}: ${err.message}`
-                  );
-                });
+              Promise.allSettled(pushPromises).catch(() => {});
             }
           }
         }
@@ -748,23 +452,23 @@ export default fp(async (fastify) => {
         const callKey = `${callerId}-${receiverId}`;
         const callTypeEnum = callType.toUpperCase() as "AUDIO" | "VIDEO";
         const callId = await saveCallHistory(
-          callerIdNumber,
-          receiverIdNumber,
-          callTypeEnum,
-          "ONGOING",
-          undefined,
-          new Date()
+          fastify.prisma as PrismaClient | undefined,
+          {
+            callerId: callerIdNumber,
+            receiverId: receiverIdNumber,
+            type: callTypeEnum,
+            status: "ONGOING",
+            startedAt: new Date(),
+          }
         );
         if (callId) {
-          callHistoryMap.set(callKey, callId);
-          callHistoryMap.set(`${receiverId}-${callerId}`, callId);
+          setCallHistoryForPair(callerId, receiverId, callId);
         }
         //---------------------------------------------------
         // Clear any old ICE candidate buffers for this call
         clearIceCandidateBuffer(callerId, receiverId);
         // Emit to all sockets of the receiver (supports multiple tabs)
-        const receiverSockets: Set<string> | undefined =
-          onlineUsers.get(receiverId);
+        const receiverSockets = getSocketsForUser(receiverId);
         if (receiverSockets && receiverSockets.size > 0) {
           io.to(receiverId).emit("call_incoming", {
             callerId,
@@ -776,7 +480,6 @@ export default fp(async (fastify) => {
           });
         }
 
-        fastify.log.info(`${callerId} calling ${receiverId} (${callType})`);
       }
     );
 
@@ -799,18 +502,17 @@ export default fp(async (fastify) => {
         });
 
         // Update call history status to ONGOING
-        const callKey = `${callerIdLocal}-${calleeId}`;
-        const callId = callHistoryMap.get(callKey);
+        const callId = getCallHistoryForPair(callerIdLocal, calleeId);
         if (callId) {
-          updateCallHistory(callId, "ONGOING").catch((error) => {
-            fastify.log.error(
-              `Failed to update call history on accept: ${error.message}`
-            );
-          });
+          updateCallHistory(
+            fastify.prisma as PrismaClient | undefined,
+            callId,
+            "ONGOING"
+          ).catch(() => {});
         }
 
         // Emit to all sockets of the caller
-        const callerSockets = onlineUsers.get(callerIdLocal);
+        const callerSockets = getSocketsForUser(callerIdLocal);
         if (callerSockets && callerSockets.size > 0) {
           io.to(callerIdLocal).emit("call_accepted", {
             receiverId: calleeId,
@@ -818,7 +520,6 @@ export default fp(async (fastify) => {
           });
         }
 
-        fastify.log.info(`Call accepted: ${callerIdLocal} ↔ ${calleeId}`);
       }
     );
 
@@ -835,35 +536,18 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        fastify.log.info(`WebRTC Offer from ${senderId} to ${receiverId}`);
+        // When offer is sent, clear any buffered ICE candidates for this direction
+        // The receiver will buffer new candidates until they process this offer
+        const bufferKey = `${receiverId}-${senderId}`;
+        const existingBuffer = iceCandidateBuffers.get(bufferKey);
+        if (existingBuffer && existingBuffer.length > 0) {
+          iceCandidateBuffers.delete(bufferKey);
+        }
 
-        // Emit offer first to the receiver
-        const receiverSockets = onlineUsers.get(receiverId);
+        // Emit to all sockets of the receiver
+        const receiverSockets = getSocketsForUser(receiverId);
         if (receiverSockets && receiverSockets.size > 0) {
           io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
-
-          // After sending the offer, flush any buffered ICE candidates from sender to receiver
-          // These are candidates that arrived before the receiver set the remote description
-          // Buffer key format: receiverId-senderId (candidates from sender to receiver)
-          const bufferKey = `${receiverId}-${senderId}`;
-          const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
-
-          if (bufferedCandidates && bufferedCandidates.length > 0) {
-            fastify.log.info(
-              `Flushing ${bufferedCandidates.length} buffered ICE candidates from ${senderId} to ${receiverId} after offer`
-            );
-
-            // Send all buffered candidates to the receiver
-            bufferedCandidates.forEach((item) => {
-              io.to(receiverId).emit("webrtc_ice", {
-                senderId,
-                candidate: item.candidate,
-              });
-            });
-
-            // Clear the buffer after flushing
-            iceCandidateBuffers.delete(bufferKey);
-          }
         }
       }
     );
@@ -881,24 +565,17 @@ export default fp(async (fastify) => {
         const senderId = getUserId();
         if (!senderId || !callerId) return;
 
-        fastify.log.info(`WebRTC Answer from ${senderId} to ${callerId}`);
-
         // When answer is sent, send any buffered ICE candidates to the caller
         const bufferKey = `${callerId}-${senderId}`;
         const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
 
         // Emit answer first
-        const callerSockets: Set<string> | undefined =
-          onlineUsers.get(callerId);
+        const callerSockets = getSocketsForUser(callerId);
         if (callerSockets && callerSockets.size > 0) {
           io.to(callerId).emit("webrtc_answer", { callerId, sdp });
 
           // Then send buffered ICE candidates if any
           if (bufferedCandidates && bufferedCandidates.length > 0) {
-            fastify.log.info(
-              `Flushing ${bufferedCandidates.length} buffered ICE candidates to ${callerId}`
-            );
-
             bufferedCandidates.forEach((item) => {
               io.to(callerId).emit("webrtc_ice", {
                 senderId,
@@ -936,61 +613,45 @@ export default fp(async (fastify) => {
           senderCall.with !== receiverId ||
           receiverCall.with !== senderId
         ) {
-          fastify.log.warn(
-            ` ICE candidate from ${senderId} to ${receiverId} but no active call`
-          );
           return;
         }
 
-        const receiverSockets = onlineUsers.get(receiverId);
+        const receiverSockets = getSocketsForUser(receiverId);
         if (!receiverSockets || receiverSockets.size === 0) {
-          fastify.log.warn(
-            ` ICE candidate from ${senderId} to ${receiverId} but receiver offline`
-          );
           return;
         }
+
+        // Buffer ICE candidate instead of sending immediately
+        // This prevents race condition where candidates arrive before remote description
+        const buffer = getIceCandidateBuffer(receiverId, senderId);
+        buffer.push({
+          candidate,
+          timestamp: Date.now(),
+        });
 
         // If call is already in "in_call" status, it means SDP exchange is complete
-        // So we can send the candidate immediately without buffering
+        // So we can send the candidate immediately
         if (
           senderCall.status === "in_call" &&
           receiverCall.status === "in_call"
         ) {
-          fastify.log.debug(
-            `✅ Call in progress, sending ICE candidate immediately to ${receiverId}`
-          );
           io.to(receiverId).emit("webrtc_ice", { senderId, candidate });
-        } else {
-          // Buffer ICE candidate instead of sending immediately
-          // This prevents race condition where candidates arrive before remote description
-          const buffer = getIceCandidateBuffer(receiverId, senderId);
-          buffer.push({
-            candidate,
-            timestamp: Date.now(),
-          });
 
-          fastify.log.debug(
-            `⏳ Call still connecting, ICE candidate buffered for ${receiverId} (buffer size: ${buffer.length})`
-          );
+          // Remove from buffer since we sent it
+          buffer.pop();
         }
       }
     );
 
     // New event: Flush buffered ICE candidates (called by client after setting remote description)
     socket.on("webrtc_ice_flush", ({ peerId }: { peerId: string }) => {
-      console.log("webrtc_ice_flush", peerId);
       const userId = getUserId();
-      console.log("userId", userId);
       if (!userId || !peerId) return;
 
       const bufferKey = `${userId}-${peerId}`;
       const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
 
       if (bufferedCandidates && bufferedCandidates.length > 0) {
-        fastify.log.info(
-          ` Client ${userId} requested flush of ${bufferedCandidates.length} ICE candidates from ${peerId}`
-        );
-
         // Send all buffered candidates
         bufferedCandidates.forEach((item) => {
           socket.emit("webrtc_ice", {
@@ -1001,9 +662,6 @@ export default fp(async (fastify) => {
 
         // Clear the buffer
         iceCandidateBuffers.delete(bufferKey);
-        fastify.log.info(` Flushed and cleared ICE buffer for ${bufferKey}`);
-      } else {
-        fastify.log.debug(`No buffered ICE candidates for ${bufferKey}`);
       }
     });
 
@@ -1018,24 +676,22 @@ export default fp(async (fastify) => {
         clearIceCandidateBuffer(callerId, receiverId);
 
         // Update call history status to DECLINED
-        const callKey = `${callerId}-${receiverId}`;
-        const callId = callHistoryMap.get(callKey);
+        const callId = getCallHistoryForPair(callerId, receiverId);
         if (callId) {
-          updateCallHistory(callId, "DECLINED", new Date())
+          updateCallHistory(
+            fastify.prisma as PrismaClient | undefined,
+            callId,
+            "DECLINED",
+            new Date()
+          )
             .then(() => {
-              callHistoryMap.delete(callKey);
-              callHistoryMap.delete(`${receiverId}-${callerId}`);
+              clearCallHistoryForPair(callerId, receiverId);
             })
-            .catch((error) => {
-              fastify.log.error(
-                `Failed to update call history on decline: ${error.message}`
-              );
-            });
+            .catch(() => {});
         }
 
         // Emit to all sockets of the caller
-        const callerSockets: Set<string> | undefined =
-          onlineUsers.get(callerId);
+        const callerSockets = getSocketsForUser(callerId);
         if (callerSockets && callerSockets.size > 0) {
           io.to(callerId).emit("call_declined", { receiverId });
         }
@@ -1074,8 +730,7 @@ export default fp(async (fastify) => {
 
           const opponentId = endedByUserId === callerId ? receiverId : callerId;
           // Emit to all sockets of the opponent (except the current socket)
-          const opponentSockets: Set<string> | undefined =
-            onlineUsers.get(opponentId);
+          const opponentSockets = getSocketsForUser(opponentId);
           if (opponentSockets && opponentSockets.size > 0) {
             // Emit to userId room, which will reach all sockets of that user
             io.to(opponentId).emit("call_ended", {
@@ -1085,24 +740,19 @@ export default fp(async (fastify) => {
           }
 
           // Update call history status - COMPLETED if accepted, CANCELED if not
-          const callKey = `${callerId}-${receiverId}`;
-          const callId = callHistoryMap.get(callKey);
+          const callId = getCallHistoryForPair(callerId, receiverId);
           if (callId) {
             const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
             updateCallHistory(
+              fastify.prisma as PrismaClient | undefined,
               callId,
               finalStatus as "COMPLETED" | "CANCELED",
               new Date()
             )
               .then(() => {
-                callHistoryMap.delete(callKey);
-                callHistoryMap.delete(`${receiverId}-${callerId}`);
+                clearCallHistoryForPair(callerId, receiverId);
               })
-              .catch((error) => {
-                fastify.log.error(
-                  `Failed to update call history on end: ${error.message}`
-                );
-              });
+              .catch(() => {});
           }
 
           // Send push notification to opponent
@@ -1168,10 +818,6 @@ export default fp(async (fastify) => {
                 for (const token of validTokens) {
                   pushPromises.push(
                     fastify.sendDataPush(token, pushData).catch((error) => {
-                      fastify.log.warn(
-                        { token, error: error?.message || error },
-                        "Call ended push notification failed"
-                      );
                       return { success: false, error };
                     })
                   );
@@ -1179,37 +825,15 @@ export default fp(async (fastify) => {
 
                 if (pushPromises.length > 0) {
                   Promise.allSettled(pushPromises)
-                    .then((results) => {
-                      const failed = results.filter(
-                        (result) => result.status === "rejected"
-                      );
-                      if (failed.length > 0) {
-                        fastify.log.warn(
-                          `Call ended push notifications failed for ${failed.length}/${validTokens.length} tokens to ${opponentId}`
-                        );
-                      }
-                    })
-                    .catch((err) => {
-                      fastify.log.error(
-                        `Error handling call ended push promises for ${opponentId}: ${err.message}`
-                      );
-                    });
+                    .then(() => {})
+                    .catch(() => {});
                 }
               }
             }
           } catch (error: any) {
-            fastify.log.error(
-              `Failed to send call ended push notification: ${error.message}`
-            );
           }
 
-          fastify.log.info(
-            `Call ended by ${endedByUserId}: ${callerId} ❌ ${receiverId}`
-          );
         } else {
-          fastify.log.warn(
-            `Invalid call_end attempt by ${endedByUserId} for call ${callerId}-${receiverId}`
-          );
         }
       }
     );
@@ -1218,32 +842,19 @@ export default fp(async (fastify) => {
     socket.on("disconnect", () => {
       const userId = getUserId();
       if (!userId) {
-        fastify.log.info(`Socket ${socket.id} disconnected (no userId found)`);
         return;
       }
 
       // Remove this specific socket from user's socket set
-      const userSockets: Set<string> | undefined = onlineUsers.get(userId);
-      if (userSockets) {
-        userSockets.delete(socket.id);
-        const remainingCount: number = userSockets.size;
-        fastify.log.info(
-          `Socket ${socket.id} removed from user ${userId}. Remaining sockets: ${remainingCount}`
-        );
+      const remainingCount = removeSocket(userId, socket.id);
 
-        // Only remove user from conversation rooms if this was their last socket
-        if (remainingCount === 0) {
-          // Remove user from all conversation rooms
-          for (const [conversationId, room] of conversationRooms.entries()) {
-            if (room.has(userId)) {
-              leaveConversationRoom(userId, conversationId);
-            }
+      // Only remove user from conversation rooms if this was their last socket
+      if (remainingCount === 0) {
+        // Remove user from all conversation rooms
+        for (const [conversationId, room] of conversationRooms.entries()) {
+          if (room.has(userId)) {
+            leaveConversationRoom(userId, conversationId);
           }
-          // Remove user from onlineUsers completely
-          onlineUsers.delete(userId);
-          fastify.log.info(
-            `User ${userId} fully disconnected (no remaining sockets)`
-          );
         }
       }
 
@@ -1257,25 +868,22 @@ export default fp(async (fastify) => {
         clearIceCandidateBuffer(userId, peerId);
 
         // Update call history status to MISSED
-        const callKey = `${userId}-${peerId}`;
-        const callId =
-          callHistoryMap.get(callKey) ||
-          callHistoryMap.get(`${peerId}-${userId}`);
+        const callId = getCallHistoryForPair(userId, peerId);
         if (callId) {
-          updateCallHistory(callId, "MISSED", new Date())
+          updateCallHistory(
+            fastify.prisma as PrismaClient | undefined,
+            callId,
+            "MISSED",
+            new Date()
+          )
             .then(() => {
-              callHistoryMap.delete(callKey);
-              callHistoryMap.delete(`${peerId}-${userId}`);
+              clearCallHistoryForPair(userId, peerId);
             })
-            .catch((error) => {
-              fastify.log.error(
-                `Failed to update call history on disconnect: ${error.message}`
-              );
-            });
+            .catch(() => {});
         }
 
         // Emit to all sockets of the peer
-        const peerSockets: Set<string> | undefined = onlineUsers.get(peerId);
+        const peerSockets = getSocketsForUser(peerId);
         if (peerSockets && peerSockets.size > 0) {
           io.to(peerId).emit("call_ended", {
             senderId: userId,
@@ -1284,8 +892,7 @@ export default fp(async (fastify) => {
         }
       }
 
-      io.emit("online-users", Array.from(onlineUsers.keys()));
-      fastify.log.info(`User disconnected: ${userId}`);
+      io.emit("online-users", getOnlineUserIds());
     });
   });
 

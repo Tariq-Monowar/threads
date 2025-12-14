@@ -5,11 +5,7 @@ import { saveCallHistory, updateCallHistory } from "../utils/callHistory";
 import { FileService } from "../utils/fileService";
 import { createOnlineUsersStore } from "../utils/onlineUsers";
 import { createConversationRoomsStore } from "../utils/conversationRooms";
-import {
-  createCallState,
-  CallType,
-  CallData,
-} from "../utils/callState";
+import { createCallState, CallType, CallData } from "../utils/callState";
 const prisma = new PrismaClient();
 
 export default fp(async (fastify) => {
@@ -67,7 +63,7 @@ export default fp(async (fastify) => {
     // ];
 
     // Helper: Get userId from socket (supports multiple sockets per user)
-    const getUserId = (): string | null => getUserIdBySocket(socket.id);
+    const getUserId = () => getUserIdBySocket(socket.id);
 
     // 1. User Join
     socket.on("join", (userId: string) => {
@@ -82,6 +78,7 @@ export default fp(async (fastify) => {
     });
 
     // 2. Typing Indicators (based on conversation rooms)
+    //-----------------------------------------------------------
     socket.on(
       "start_typing",
       ({
@@ -173,6 +170,7 @@ export default fp(async (fastify) => {
         });
       }
     );
+    //-----------------------------------------------------------
 
     // 3. Get online users
     socket.on("get_online_users", () => {
@@ -180,6 +178,7 @@ export default fp(async (fastify) => {
     });
 
     // 4. Join Conversation Room
+    //-----------------------------------------------------------
     socket.on(
       "join_conversation",
       async ({
@@ -304,8 +303,7 @@ export default fp(async (fastify) => {
                 );
               }
             });
-          } catch (error: any) {
-          }
+          } catch (error: any) {}
         });
       }
     );
@@ -327,7 +325,9 @@ export default fp(async (fastify) => {
         socket.emit("conversation_left", { conversationId });
       }
     );
+    //-----------------------------------------------------------
 
+    //==========================================call===========================================
     // 6. Call Initiate (A calls B)
     socket.on(
       "call_initiate",
@@ -479,7 +479,6 @@ export default fp(async (fastify) => {
             },
           });
         }
-
       }
     );
 
@@ -519,7 +518,6 @@ export default fp(async (fastify) => {
             callType: callData.type,
           });
         }
-
       }
     );
 
@@ -572,7 +570,7 @@ export default fp(async (fastify) => {
         // Emit answer first
         const callerSockets = getSocketsForUser(callerId);
         if (callerSockets && callerSockets.size > 0) {
-          io.to(callerId).emit("webrtc_answer", { callerId, sdp });
+          io.to(callerId).emit("webrtc_answer", { senderId, sdp });
 
           // Then send buffered ICE candidates if any
           if (bufferedCandidates && bufferedCandidates.length > 0) {
@@ -652,13 +650,16 @@ export default fp(async (fastify) => {
       const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
 
       if (bufferedCandidates && bufferedCandidates.length > 0) {
-        // Send all buffered candidates
-        bufferedCandidates.forEach((item) => {
-          socket.emit("webrtc_ice", {
-            senderId: peerId,
-            candidate: item.candidate,
+        // Send all buffered candidates to the peer
+        const peerSockets = getSocketsForUser(peerId);
+        if (peerSockets && peerSockets.size > 0) {
+          bufferedCandidates.forEach((item) => {
+            io.to(peerId).emit("webrtc_ice", {
+              senderId: userId,
+              candidate: item.candidate,
+            });
           });
-        });
+        }
 
         // Clear the buffer
         iceCandidateBuffers.delete(bufferKey);
@@ -830,13 +831,13 @@ export default fp(async (fastify) => {
                 }
               }
             }
-          } catch (error: any) {
-          }
-
+          } catch (error: any) {}
         } else {
         }
       }
     );
+
+    //==========================================call end===========================================
 
     // 13. Disconnect - Cleanup
     socket.on("disconnect", () => {

@@ -1,4 +1,3 @@
-
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
@@ -327,18 +326,29 @@ export default fp(async (fastify) => {
       }
     );
     //-----------------------------------------------------------
-
+    // 'callerId': callerId,
+    //       'receiverId': receiverId,
+    //       'callType': isVideo ? 'video' : 'audio',
+    //       "offer": offer.toMap(),
+    // socketService.emit('call_initiate', {
+    //       'callerId': callerId,
+    //       'receiverId': receiverId,
+    //       'callType': isVideo ? 'video' : 'audio',
+    //       "offer": offer.toMap(),
+    //     });
     //==========================================call===========================================
-    // 6. Call Initiate (A calls B)
+    // 6. Call Initiate (A calls B) offer send
     socket.on(
       "call_initiate",
       async ({
+        offer,
         callerId,
         receiverId,
         callType = "audio",
         callerName,
         callerAvatar,
       }: {
+        offer?: RTCSessionDescriptionInit;
         callerId: string;
         receiverId: string;
         callType?: CallType;
@@ -478,15 +488,24 @@ export default fp(async (fastify) => {
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo?.avatar || ""),
             },
+            offer,
           });
         }
       }
     );
 
-    // 7. Call Accept
+    // 7. Call Accept // i need to get the answer form frontend and send it to the caller
     socket.on(
       "call_accept",
-      ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+      ({
+        callerId,
+        receiverId,
+        answer,
+      }: {
+        callerId: string;
+        receiverId: string;
+        answer: RTCSessionDescriptionInit;
+      }) => {
         const callerIdLocal = callerId;
         const calleeId = receiverId;
 
@@ -517,6 +536,7 @@ export default fp(async (fastify) => {
           io.to(callerIdLocal).emit("call_accepted", {
             receiverId: calleeId,
             callType: callData.type,
+            answer,
           });
         }
       }
@@ -568,8 +588,12 @@ export default fp(async (fastify) => {
         // Candidates from receiver to caller are buffered as `${callerId}-${receiverId}` = `${callerId}-${senderId}`
         const bufferKeyFromCallerToReceiver = `${senderId}-${callerId}`; // Candidates from caller to receiver
         const bufferKeyFromReceiverToCaller = `${callerId}-${senderId}`; // Candidates from receiver to caller
-        const bufferedCandidatesFromCaller = iceCandidateBuffers.get(bufferKeyFromCallerToReceiver);
-        const bufferedCandidatesFromReceiver = iceCandidateBuffers.get(bufferKeyFromReceiverToCaller);
+        const bufferedCandidatesFromCaller = iceCandidateBuffers.get(
+          bufferKeyFromCallerToReceiver
+        );
+        const bufferedCandidatesFromReceiver = iceCandidateBuffers.get(
+          bufferKeyFromReceiverToCaller
+        );
 
         // Emit answer to caller first
         const callerSockets = getSocketsForUser(callerId);
@@ -577,7 +601,10 @@ export default fp(async (fastify) => {
           io.to(callerId).emit("webrtc_answer", { senderId, sdp });
 
           // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
-          if (bufferedCandidatesFromReceiver && bufferedCandidatesFromReceiver.length > 0) {
+          if (
+            bufferedCandidatesFromReceiver &&
+            bufferedCandidatesFromReceiver.length > 0
+          ) {
             bufferedCandidatesFromReceiver.forEach((item) => {
               io.to(callerId).emit("webrtc_ice", {
                 senderId,
@@ -591,7 +618,10 @@ export default fp(async (fastify) => {
         // Send buffered ICE candidates FROM caller TO receiver (caller sent these before answer)
         const receiverSockets = getSocketsForUser(senderId);
         if (receiverSockets && receiverSockets.size > 0) {
-          if (bufferedCandidatesFromCaller && bufferedCandidatesFromCaller.length > 0) {
+          if (
+            bufferedCandidatesFromCaller &&
+            bufferedCandidatesFromCaller.length > 0
+          ) {
             bufferedCandidatesFromCaller.forEach((item) => {
               io.to(senderId).emit("webrtc_ice", {
                 senderId: callerId,

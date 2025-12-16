@@ -1,3 +1,4 @@
+
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
@@ -920,7 +921,8 @@ export default fp(async (fastify) => {
 declare module "fastify" {
   interface FastifyInstance {
     io: Server;
-    onlineUsers: Map<string, Set<string>>; // Map<userId, Set<socketId>> - supports multiple sockets per user
+    onlineUsers: Map<string, Set<string>>;
+    // @ts-ignore - TypeScript module augmentation quirk: identical types seen as different
     activeCalls: Map<string, CallData>;
     isUserInConversationRoom: (
       userId: string,

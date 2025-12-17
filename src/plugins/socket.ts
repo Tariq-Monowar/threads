@@ -543,6 +543,33 @@ export default fp(async (fastify) => {
     );
 
     // 8. WebRTC Offer (SDP Offer)
+    // socket.on(
+    //   "webrtc_offer",
+    //   ({
+    //     receiverId,
+    //     sdp,
+    //   }: {
+    //     receiverId: string;
+    //     sdp: RTCSessionDescriptionInit;
+    //   }) => {
+    //     const senderId = getUserId();
+    //     if (!senderId || !receiverId) return;
+
+    //     // When offer is sent, clear any old buffered ICE candidates
+    //     // Clear both directions to ensure clean state
+    //     const bufferKey1 = `${receiverId}-${senderId}`;
+    //     const bufferKey2 = `${senderId}-${receiverId}`;
+    //     iceCandidateBuffers.delete(bufferKey1);
+    //     iceCandidateBuffers.delete(bufferKey2);
+
+    //     // Emit to all sockets of the receiver
+    //     const receiverSockets = getSocketsForUser(receiverId);
+    //     if (receiverSockets && receiverSockets.size > 0) {
+    //       io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
+    //     }
+    //   }
+    // );
+
     socket.on(
       "webrtc_offer",
       ({
@@ -553,19 +580,46 @@ export default fp(async (fastify) => {
         sdp: RTCSessionDescriptionInit;
       }) => {
         const senderId = getUserId();
-        if (!senderId || !receiverId) return;
+
+        console.log("[webrtc_offer] Event received");
+        console.log("Sender ID:", senderId);
+        console.log("Receiver ID:", receiverId);
+
+        if (!senderId || !receiverId) {
+          console.warn(
+            "[webrtc_offer] Missing sender or receiver ID, ignoring"
+          );
+          return;
+        }
 
         // When offer is sent, clear any old buffered ICE candidates
-        // Clear both directions to ensure clean state
         const bufferKey1 = `${receiverId}-${senderId}`;
         const bufferKey2 = `${senderId}-${receiverId}`;
+
+        console.log(
+          "[webrtc_offer] Clearing ICE candidate buffers:",
+          bufferKey1,
+          bufferKey2
+        );
         iceCandidateBuffers.delete(bufferKey1);
         iceCandidateBuffers.delete(bufferKey2);
 
         // Emit to all sockets of the receiver
         const receiverSockets = getSocketsForUser(receiverId);
+        console.log(
+          "[webrtc_offer] Receiver sockets found:",
+          receiverSockets?.size || 0
+        );
+
         if (receiverSockets && receiverSockets.size > 0) {
+          console.log(
+            `[webrtc_offer] Sending offer to receiverId=${receiverId}`
+          );
           io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
+        } else {
+          console.warn(
+            `[webrtc_offer] No sockets found for receiverId=${receiverId}`
+          );
         }
       }
     );
@@ -916,7 +970,7 @@ export default fp(async (fastify) => {
     socket.on("call_request_offer", ({ callerId }: { callerId: string }) => {
       const receiverId = getUserId();
       if (!receiverId || !callerId) return;
-      
+
       const callerData = activeCalls.get(callerId);
       if (callerData && callerData.with === receiverId) {
         // Ask caller to resend offer

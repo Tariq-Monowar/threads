@@ -743,140 +743,156 @@ export default fp(async (fastify) => {
     );
 
     // 12. Call End
+    // socket.on(
+    //   "call_end",
+    //   async ({
+    //     callerId,
+    //     receiverId,
+    //   }: {
+    //     callerId: string;
+    //     receiverId: string;
+    //   }) => {
+    //     const endedByUserId = getUserId();
+    //     if (!endedByUserId) return;
+
+    //     const callerCall = activeCalls.get(callerId);
+    //     const receiverCall = activeCalls.get(receiverId);
+
+    //     if (
+    //       callerCall &&
+    //       callerCall.with === receiverId &&
+    //       receiverCall &&
+    //       receiverCall.with === callerId
+    //     ) {
+    //       const wasAccepted = callerCall.status === "in_call";
+    //       const callType = callerCall.type;
+    //       activeCalls.delete(callerId);
+    //       activeCalls.delete(receiverId);
+
+    //       // Clear ICE buffers
+    //       clearIceCandidateBuffer(callerId, receiverId);
+
+    //       const opponentId = endedByUserId === callerId ? receiverId : callerId;
+    //       // Emit to all sockets of the opponent (except the current socket)
+    //       const opponentSockets = getSocketsForUser(opponentId);
+    //       if (opponentSockets && opponentSockets.size > 0) {
+    //         // Emit to userId room, which will reach all sockets of that user
+    //         io.to(opponentId).emit("call_ended", {
+    //           endedBy: endedByUserId,
+    //           reason: "ended_by_user",
+    //         });
+    //       }
+
+    //       // Update call history status - COMPLETED if accepted, CANCELED if not
+    //       const callId = getCallHistoryForPair(callerId, receiverId);
+    //       if (callId) {
+    //         const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
+    //         updateCallHistory(
+    //           fastify.prisma as PrismaClient | undefined,
+    //           callId,
+    //           finalStatus as "COMPLETED" | "CANCELED",
+    //           new Date()
+    //         )
+    //           .then(() => {
+    //             clearCallHistoryForPair(callerId, receiverId);
+    //           })
+    //           .catch(() => {});
+    //       }
+
+    //       // Send push notification to opponent
+    //       try {
+    //         const callerIdNumber = Number(callerId);
+    //         const receiverIdNumber = Number(receiverId);
+    //         const opponentIdNumber = Number(opponentId);
+
+    //         if (
+    //           !Number.isNaN(callerIdNumber) &&
+    //           !Number.isNaN(receiverIdNumber)
+    //         ) {
+    //           const usersData = await prisma.user.findMany({
+    //             where: {
+    //               id: { in: [callerIdNumber, receiverIdNumber] },
+    //             },
+    //             select: {
+    //               id: true,
+    //               name: true,
+    //               avatar: true,
+    //               fcmToken: true,
+    //             },
+    //           });
+
+    //           const opponentData = usersData.find(
+    //             (u) => u.id === opponentIdNumber
+    //           );
+    //           const endedByUserData = usersData.find(
+    //             (u) => u.id === Number(endedByUserId)
+    //           );
+
+    //           if (
+    //             opponentData &&
+    //             opponentData.fcmToken &&
+    //             opponentData.fcmToken.length > 0
+    //           ) {
+    //             const endedByUserInfo = endedByUserData
+    //               ? {
+    //                   id: endedByUserData.id.toString(),
+    //                   name: endedByUserData.name || `User ${endedByUserId}`,
+    //                   avatar: FileService.avatarUrl(
+    //                     endedByUserData.avatar || ""
+    //                   ),
+    //                 }
+    //               : null;
+
+    //             const pushData: Record<string, string> = {
+    //               type: "call_ended",
+    //               endedBy: endedByUserId,
+    //               callType: callType,
+    //               reason: wasAccepted ? "completed" : "canceled",
+    //             };
+
+    //             if (endedByUserInfo) {
+    //               pushData.endedByUser = JSON.stringify(endedByUserInfo);
+    //             }
+
+    //             const pushPromises: Promise<any>[] = [];
+    //             const validTokens = opponentData.fcmToken.filter(
+    //               (token): token is string => Boolean(token)
+    //             );
+
+    //             for (const token of validTokens) {
+    //               pushPromises.push(
+    //                 fastify.sendDataPush(token, pushData).catch((error) => {
+    //                   return { success: false, error };
+    //                 })
+    //               );
+    //             }
+
+    //             if (pushPromises.length > 0) {
+    //               Promise.allSettled(pushPromises)
+    //                 .then(() => {})
+    //                 .catch(() => {});
+    //             }
+    //           }
+    //         }
+    //       } catch (error: any) {}
+    //     } else {
+    //     }
+    //   }
+    // );
+
     socket.on(
-      "call_end",
-      async ({
-        callerId,
-        receiverId,
-      }: {
-        callerId: string;
-        receiverId: string;
-      }) => {
-        const endedByUserId = getUserId();
-        if (!endedByUserId) return;
-
-        const callerCall = activeCalls.get(callerId);
-        const receiverCall = activeCalls.get(receiverId);
-
-        if (
-          callerCall &&
-          callerCall.with === receiverId &&
-          receiverCall &&
-          receiverCall.with === callerId
-        ) {
-          const wasAccepted = callerCall.status === "in_call";
-          const callType = callerCall.type;
-          activeCalls.delete(callerId);
-          activeCalls.delete(receiverId);
-
-          // Clear ICE buffers
-          clearIceCandidateBuffer(callerId, receiverId);
-
-          const opponentId = endedByUserId === callerId ? receiverId : callerId;
-          // Emit to all sockets of the opponent (except the current socket)
-          const opponentSockets = getSocketsForUser(opponentId);
-          if (opponentSockets && opponentSockets.size > 0) {
-            // Emit to userId room, which will reach all sockets of that user
-            io.to(opponentId).emit("call_ended", {
-              endedBy: endedByUserId,
-              reason: "ended_by_user",
-            });
-          }
-
-          // Update call history status - COMPLETED if accepted, CANCELED if not
-          const callId = getCallHistoryForPair(callerId, receiverId);
-          if (callId) {
-            const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
-            updateCallHistory(
-              fastify.prisma as PrismaClient | undefined,
-              callId,
-              finalStatus as "COMPLETED" | "CANCELED",
-              new Date()
-            )
-              .then(() => {
-                clearCallHistoryForPair(callerId, receiverId);
-              })
-              .catch(() => {});
-          }
-
-          // Send push notification to opponent
-          try {
-            const callerIdNumber = Number(callerId);
-            const receiverIdNumber = Number(receiverId);
-            const opponentIdNumber = Number(opponentId);
-
-            if (
-              !Number.isNaN(callerIdNumber) &&
-              !Number.isNaN(receiverIdNumber)
-            ) {
-              const usersData = await prisma.user.findMany({
-                where: {
-                  id: { in: [callerIdNumber, receiverIdNumber] },
-                },
-                select: {
-                  id: true,
-                  name: true,
-                  avatar: true,
-                  fcmToken: true,
-                },
-              });
-
-              const opponentData = usersData.find(
-                (u) => u.id === opponentIdNumber
-              );
-              const endedByUserData = usersData.find(
-                (u) => u.id === Number(endedByUserId)
-              );
-
-              if (
-                opponentData &&
-                opponentData.fcmToken &&
-                opponentData.fcmToken.length > 0
-              ) {
-                const endedByUserInfo = endedByUserData
-                  ? {
-                      id: endedByUserData.id.toString(),
-                      name: endedByUserData.name || `User ${endedByUserId}`,
-                      avatar: FileService.avatarUrl(
-                        endedByUserData.avatar || ""
-                      ),
-                    }
-                  : null;
-
-                const pushData: Record<string, string> = {
-                  type: "call_ended",
-                  endedBy: endedByUserId,
-                  callType: callType,
-                  reason: wasAccepted ? "completed" : "canceled",
-                };
-
-                if (endedByUserInfo) {
-                  pushData.endedByUser = JSON.stringify(endedByUserInfo);
-                }
-
-                const pushPromises: Promise<any>[] = [];
-                const validTokens = opponentData.fcmToken.filter(
-                  (token): token is string => Boolean(token)
-                );
-
-                for (const token of validTokens) {
-                  pushPromises.push(
-                    fastify.sendDataPush(token, pushData).catch((error) => {
-                      return { success: false, error };
-                    })
-                  );
-                }
-
-                if (pushPromises.length > 0) {
-                  Promise.allSettled(pushPromises)
-                    .then(() => {})
-                    .catch(() => {});
-                }
-              }
-            }
-          } catch (error: any) {}
-        } else {
+      "answer_complete",
+      ({ receiverId, data }: { receiverId: string; data: any }) => {
+        const senderId = getUserId();
+        if (!senderId || !receiverId) {
+          console.log("[answer_complete] Missing sender or receiver ID");
+          return;
         }
+
+        io.to(receiverId).emit("answer_complete", {
+          senderId,
+          data,
+        });
       }
     );
 
@@ -983,54 +999,67 @@ export default fp(async (fastify) => {
     );
 
     // 15. Request Offer (receiver asks for offer if missed)
-    socket.on("call_answer_recent", ({ callerId }: { callerId: string }) => {
-      const receiverId = getUserId();
-
-      console.log("[CALL][ANSWER_RECENT] Receiver requested recent offer", {
-        receiverId,
+    socket.on(
+      "call_answer_recent",
+      ({
         callerId,
-      });
+        sdp,
+      }: {
+        callerId: string;
+        sdp: RTCSessionDescriptionInit;
+      }) => {
+        const receiverId = getUserId();
 
-      if (!receiverId || !callerId) {
-        console.warn("[CALL][ANSWER_RECENT] Missing receiverId or callerId");
-        return;
-      }
-
-      const callerData = activeCalls.get(callerId);
-
-      if (!callerData) {
-        console.warn("[CALL][ANSWER_RECENT] No active call found for caller", {
+        console.log("[CALL][ANSWER_RECENT] Receiver requested recent offer", {
+          receiverId,
           callerId,
         });
-        return;
-      }
 
-      if (callerData.with !== receiverId) {
-        console.warn("[CALL][ANSWER_RECENT] Call partner mismatch", {
-          expected: callerData.with,
-          actual: receiverId,
-        });
-        return;
-      }
+        if (!receiverId || !callerId) {
+          console.warn("[CALL][ANSWER_RECENT] Missing receiverId or callerId");
+          return;
+        }
 
-      const callerSockets = getSocketsForUser(callerId);
+        const callerData = activeCalls.get(callerId);
 
-      if (!callerSockets || callerSockets.size === 0) {
-        console.warn("[CALL][ANSWER_RECENT] Caller is offline", {
+        if (!callerData) {
+          console.warn(
+            "[CALL][ANSWER_RECENT] No active call found for caller",
+            {
+              callerId,
+            }
+          );
+          return;
+        }
+
+        if (callerData.with !== receiverId) {
+          console.warn("[CALL][ANSWER_RECENT] Call partner mismatch", {
+            expected: callerData.with,
+            actual: receiverId,
+          });
+          return;
+        }
+
+        const callerSockets = getSocketsForUser(callerId);
+
+        if (!callerSockets || callerSockets.size === 0) {
+          console.warn("[CALL][ANSWER_RECENT] Caller is offline", {
+            callerId,
+          });
+          return;
+        }
+
+        console.log("[CALL][ANSWER_RECENT] Notifying caller to resend offer", {
           callerId,
+          socketCount: callerSockets.size,
         });
-        return;
+
+        io.to(callerId).emit("call_answer_recent", {
+          receiverId,
+          sdp,
+        });
       }
-
-      console.log("[CALL][ANSWER_RECENT] Notifying caller to resend offer", {
-        callerId,
-        socketCount: callerSockets.size,
-      });
-
-      io.to(callerId).emit("call_answer_recent", {
-        receiverId,
-      });
-    });
+    );
 
     //==========================================call end===========================================
 

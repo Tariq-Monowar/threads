@@ -500,8 +500,8 @@ export default fp(async (fastify) => {
       ({
         callerId,
         receiverId,
-        // answer,
-      }: {
+      }: // answer,
+      {
         callerId: string;
         receiverId: string;
         // answer: RTCSessionDescriptionInit;
@@ -879,6 +879,55 @@ export default fp(async (fastify) => {
         }
       }
     );
+
+    socket.on(
+      "call_offer_resend",
+      ({
+        receiverId,
+        sdp,
+        callType,
+        callerInfo,
+      }: {
+        receiverId: string;
+        sdp: RTCSessionDescriptionInit;
+        callType: CallType;
+        callerInfo: any;
+      }) => {
+        const senderId = getUserId();
+        if (!senderId || !receiverId) return;
+
+        // Check if there's already a call attempt
+        const existingCall = activeCalls.get(senderId);
+        if (existingCall && existingCall.with === receiverId) {
+          const receiverSockets = getSocketsForUser(receiverId);
+          if (receiverSockets && receiverSockets.size > 0) {
+            io.to(receiverId).emit("call_incoming_with_offer", {
+              callerId: senderId,
+              callType,
+              callerInfo,
+              sdp,
+            });
+          }
+        }
+      }
+    );
+
+    // 14. Request Offer (receiver asks for offer if missed)
+    socket.on("call_request_offer", ({ callerId }: { callerId: string }) => {
+      const receiverId = getUserId();
+      if (!receiverId || !callerId) return;
+      
+      const callerData = activeCalls.get(callerId);
+      if (callerData && callerData.with === receiverId) {
+        // Ask caller to resend offer
+        const callerSockets = getSocketsForUser(callerId);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("call_resend_offer_requested", {
+            receiverId,
+          });
+        }
+      }
+    });
 
     //==========================================call end===========================================
 

@@ -897,38 +897,38 @@ export default fp(async (fastify) => {
     );
 
     // 13. Answer Complete — forward to the opposite user
-    socket.on(
-      "answer_complete",
-      ({ receiverId, data }: { receiverId: string; data: any }) => {
-        const senderId = getUserId();
-        if (!senderId || !receiverId) return;
+    // socket.on(
+    //   "answer_complete",
+    //   ({ receiverId, data }: { receiverId: string; data: any }) => {
+    //     const senderId = getUserId();
+    //     if (!senderId || !receiverId) return;
 
-        const senderCall = activeCalls.get(senderId);
-        const receiverCall = activeCalls.get(receiverId);
-        console.log(receiverId, data);
-        if (
-          !senderCall ||
-          !receiverCall ||
-          senderCall.with !== receiverId ||
-          receiverCall.with !== senderId
-        ) {
-          console.warn("[answer_complete] Users not in active call, ignoring");
-          return;
-        }
+    //     const senderCall = activeCalls.get(senderId);
+    //     const receiverCall = activeCalls.get(receiverId);
+    //     console.log(receiverId, data);
+    //     if (
+    //       !senderCall ||
+    //       !receiverCall ||
+    //       senderCall.with !== receiverId ||
+    //       receiverCall.with !== senderId
+    //     ) {
+    //       console.warn("[answer_complete] Users not in active call, ignoring");
+    //       return;
+    //     }
 
-        const receiverSockets = getSocketsForUser(receiverId);
-        if (receiverSockets && receiverSockets.size > 0) {
-          console.log(
-            `[answer_complete] Forwarding data from ${senderId} to ${receiverId}`,
-            data
-          );
-          io.to(receiverId).emit("answer_complete", {
-            senderId,
-            data,
-          });
-        }
-      }
-    );
+    //     const receiverSockets = getSocketsForUser(receiverId);
+    //     if (receiverSockets && receiverSockets.size > 0) {
+    //       console.log(
+    //         `[answer_complete] Forwarding data from ${senderId} to ${receiverId}`,
+    //         data
+    //       );
+    //       io.to(receiverId).emit("answer_complete", {
+    //         senderId,
+    //         data,
+    //       });
+    //     }
+    //   }
+    // );
 
     // 14. Call Offer Resend (caller resends offer if missed)
     // 14. Call Offer Resend (caller resends offer if missed)

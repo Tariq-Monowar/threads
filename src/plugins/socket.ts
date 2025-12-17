@@ -341,14 +341,14 @@ export default fp(async (fastify) => {
     socket.on(
       "call_initiate",
       async ({
-        offer,
+        // offer,
         callerId,
         receiverId,
         callType = "audio",
         callerName,
         callerAvatar,
       }: {
-        offer?: RTCSessionDescriptionInit;
+        // offer?: RTCSessionDescriptionInit;
         callerId: string;
         receiverId: string;
         callType?: CallType;
@@ -488,7 +488,7 @@ export default fp(async (fastify) => {
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo?.avatar || ""),
             },
-            offer,
+            // offer,
           });
         }
       }
@@ -500,11 +500,11 @@ export default fp(async (fastify) => {
       ({
         callerId,
         receiverId,
-        answer,
+        // answer,
       }: {
         callerId: string;
         receiverId: string;
-        answer: RTCSessionDescriptionInit;
+        // answer: RTCSessionDescriptionInit;
       }) => {
         const callerIdLocal = callerId;
         const calleeId = receiverId;
@@ -536,103 +536,103 @@ export default fp(async (fastify) => {
           io.to(callerIdLocal).emit("call_accepted", {
             receiverId: calleeId,
             callType: callData.type,
-            answer,
+            //answer,
           });
         }
       }
     );
 
     // 8. WebRTC Offer (SDP Offer)
-    // socket.on(
-    //   "webrtc_offer",
-    //   ({
-    //     receiverId,
-    //     sdp,
-    //   }: {
-    //     receiverId: string;
-    //     sdp: RTCSessionDescriptionInit;
-    //   }) => {
-    //     const senderId = getUserId();
-    //     if (!senderId || !receiverId) return;
+    socket.on(
+      "webrtc_offer",
+      ({
+        receiverId,
+        sdp,
+      }: {
+        receiverId: string;
+        sdp: RTCSessionDescriptionInit;
+      }) => {
+        const senderId = getUserId();
+        if (!senderId || !receiverId) return;
 
-    //     // When offer is sent, clear any old buffered ICE candidates
-    //     // Clear both directions to ensure clean state
-    //     const bufferKey1 = `${receiverId}-${senderId}`;
-    //     const bufferKey2 = `${senderId}-${receiverId}`;
-    //     iceCandidateBuffers.delete(bufferKey1);
-    //     iceCandidateBuffers.delete(bufferKey2);
+        // When offer is sent, clear any old buffered ICE candidates
+        // Clear both directions to ensure clean state
+        const bufferKey1 = `${receiverId}-${senderId}`;
+        const bufferKey2 = `${senderId}-${receiverId}`;
+        iceCandidateBuffers.delete(bufferKey1);
+        iceCandidateBuffers.delete(bufferKey2);
 
-    //     // Emit to all sockets of the receiver
-    //     const receiverSockets = getSocketsForUser(receiverId);
-    //     if (receiverSockets && receiverSockets.size > 0) {
-    //       io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
-    //     }
-    //   }
-    // );
+        // Emit to all sockets of the receiver
+        const receiverSockets = getSocketsForUser(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
+        }
+      }
+    );
 
     // 9. WebRTC Answer (SDP Answer)
-    // socket.on(
-    //   "webrtc_answer",
-    //   ({
-    //     callerId,
-    //     sdp,
-    //   }: {
-    //     callerId: string;
-    //     sdp: RTCSessionDescriptionInit;
-    //   }) => {
-    //     const senderId = getUserId();
-    //     if (!senderId || !callerId) return;
+    socket.on(
+      "webrtc_answer",
+      ({
+        callerId,
+        sdp,
+      }: {
+        callerId: string;
+        sdp: RTCSessionDescriptionInit;
+      }) => {
+        const senderId = getUserId();
+        if (!senderId || !callerId) return;
 
-    //     // When answer is sent, flush any buffered ICE candidates
-    //     // Candidates from caller to receiver are buffered as `${receiverId}-${callerId}` = `${senderId}-${callerId}`
-    //     // Candidates from receiver to caller are buffered as `${callerId}-${receiverId}` = `${callerId}-${senderId}`
-    //     const bufferKeyFromCallerToReceiver = `${senderId}-${callerId}`; // Candidates from caller to receiver
-    //     const bufferKeyFromReceiverToCaller = `${callerId}-${senderId}`; // Candidates from receiver to caller
-    //     const bufferedCandidatesFromCaller = iceCandidateBuffers.get(
-    //       bufferKeyFromCallerToReceiver
-    //     );
-    //     const bufferedCandidatesFromReceiver = iceCandidateBuffers.get(
-    //       bufferKeyFromReceiverToCaller
-    //     );
+        // When answer is sent, flush any buffered ICE candidates
+        // Candidates from caller to receiver are buffered as `${receiverId}-${callerId}` = `${senderId}-${callerId}`
+        // Candidates from receiver to caller are buffered as `${callerId}-${receiverId}` = `${callerId}-${senderId}`
+        const bufferKeyFromCallerToReceiver = `${senderId}-${callerId}`; // Candidates from caller to receiver
+        const bufferKeyFromReceiverToCaller = `${callerId}-${senderId}`; // Candidates from receiver to caller
+        const bufferedCandidatesFromCaller = iceCandidateBuffers.get(
+          bufferKeyFromCallerToReceiver
+        );
+        const bufferedCandidatesFromReceiver = iceCandidateBuffers.get(
+          bufferKeyFromReceiverToCaller
+        );
 
-    //     // Emit answer to caller first
-    //     const callerSockets = getSocketsForUser(callerId);
-    //     if (callerSockets && callerSockets.size > 0) {
-    //       io.to(callerId).emit("webrtc_answer", { senderId, sdp });
+        // Emit answer to caller first
+        const callerSockets = getSocketsForUser(callerId);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("webrtc_answer", { senderId, sdp });
 
-    //       // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
-    //       if (
-    //         bufferedCandidatesFromReceiver &&
-    //         bufferedCandidatesFromReceiver.length > 0
-    //       ) {
-    //         bufferedCandidatesFromReceiver.forEach((item) => {
-    //           io.to(callerId).emit("webrtc_ice", {
-    //             senderId,
-    //             candidate: item.candidate,
-    //           });
-    //         });
-    //         iceCandidateBuffers.delete(bufferKeyFromReceiverToCaller);
-    //       }
-    //     }
+          // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
+          if (
+            bufferedCandidatesFromReceiver &&
+            bufferedCandidatesFromReceiver.length > 0
+          ) {
+            bufferedCandidatesFromReceiver.forEach((item) => {
+              io.to(callerId).emit("webrtc_ice", {
+                senderId,
+                candidate: item.candidate,
+              });
+            });
+            iceCandidateBuffers.delete(bufferKeyFromReceiverToCaller);
+          }
+        }
 
-    //     // Send buffered ICE candidates FROM caller TO receiver (caller sent these before answer)
-    //     const receiverSockets = getSocketsForUser(senderId);
-    //     if (receiverSockets && receiverSockets.size > 0) {
-    //       if (
-    //         bufferedCandidatesFromCaller &&
-    //         bufferedCandidatesFromCaller.length > 0
-    //       ) {
-    //         bufferedCandidatesFromCaller.forEach((item) => {
-    //           io.to(senderId).emit("webrtc_ice", {
-    //             senderId: callerId,
-    //             candidate: item.candidate,
-    //           });
-    //         });
-    //         iceCandidateBuffers.delete(bufferKeyFromCallerToReceiver);
-    //       }
-    //     }
-    //   }
-    // );
+        // Send buffered ICE candidates FROM caller TO receiver (caller sent these before answer)
+        const receiverSockets = getSocketsForUser(senderId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          if (
+            bufferedCandidatesFromCaller &&
+            bufferedCandidatesFromCaller.length > 0
+          ) {
+            bufferedCandidatesFromCaller.forEach((item) => {
+              io.to(senderId).emit("webrtc_ice", {
+                senderId: callerId,
+                candidate: item.candidate,
+              });
+            });
+            iceCandidateBuffers.delete(bufferKeyFromCallerToReceiver);
+          }
+        }
+      }
+    );
 
     // 10. ICE Candidate (with buffering to prevent race conditions)
     socket.on(

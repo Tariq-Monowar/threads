@@ -914,6 +914,54 @@ export default fp(async (fastify) => {
       }
     );
 
+    // 14. Call Offer Resend (caller resends offer if missed)
+    socket.on(
+      "call_offer_resend",
+      ({
+        receiverId,
+        sdp,
+        callType,
+        callerInfo,
+      }: {
+        receiverId: string;
+        sdp: RTCSessionDescriptionInit;
+        callType: CallType;
+        callerInfo: any;
+      }) => {
+        const senderId = getUserId();
+        if (!senderId || !receiverId) return;
+
+        const existingCall = activeCalls.get(senderId);
+        if (existingCall && existingCall.with === receiverId) {
+          const receiverSockets = getSocketsForUser(receiverId);
+          if (receiverSockets && receiverSockets.size > 0) {
+            io.to(receiverId).emit("call_offer_resend", {
+              callerId: senderId,
+              callType,
+              callerInfo,
+              sdp,
+            });
+          }
+        }
+      }
+    );
+
+    // 15. Request Offer (receiver asks for offer if missed)
+    socket.on("call_answer_recent", ({ callerId }: { callerId: string }) => {
+      const receiverId = getUserId();
+      if (!receiverId || !callerId) return;
+
+      const callerData = activeCalls.get(callerId);
+      if (callerData && callerData.with === receiverId) {
+        const callerSockets = getSocketsForUser(callerId);
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("call_answer_recent", {
+            receiverId,
+          });
+        }
+      }
+    });
+
     //==========================================call end===========================================
 
     // 13. Disconnect - Cleanup

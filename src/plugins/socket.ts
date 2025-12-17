@@ -543,33 +543,6 @@ export default fp(async (fastify) => {
     );
 
     // 8. WebRTC Offer (SDP Offer)
-    // socket.on(
-    //   "webrtc_offer",
-    //   ({
-    //     receiverId,
-    //     sdp,
-    //   }: {
-    //     receiverId: string;
-    //     sdp: RTCSessionDescriptionInit;
-    //   }) => {
-    //     const senderId = getUserId();
-    //     if (!senderId || !receiverId) return;
-
-    //     // When offer is sent, clear any old buffered ICE candidates
-    //     // Clear both directions to ensure clean state
-    //     const bufferKey1 = `${receiverId}-${senderId}`;
-    //     const bufferKey2 = `${senderId}-${receiverId}`;
-    //     iceCandidateBuffers.delete(bufferKey1);
-    //     iceCandidateBuffers.delete(bufferKey2);
-
-    //     // Emit to all sockets of the receiver
-    //     const receiverSockets = getSocketsForUser(receiverId);
-    //     if (receiverSockets && receiverSockets.size > 0) {
-    //       io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
-    //     }
-    //   }
-    // );
-
     socket.on(
       "webrtc_offer",
       ({
@@ -580,46 +553,19 @@ export default fp(async (fastify) => {
         sdp: RTCSessionDescriptionInit;
       }) => {
         const senderId = getUserId();
-
-        console.log("[webrtc_offer] Event received");
-        console.log("Sender ID:", senderId);
-        console.log("Receiver ID:", receiverId);
-
-        if (!senderId || !receiverId) {
-          console.warn(
-            "[webrtc_offer] Missing sender or receiver ID, ignoring"
-          );
-          return;
-        }
+        if (!senderId || !receiverId) return;
 
         // When offer is sent, clear any old buffered ICE candidates
+        // Clear both directions to ensure clean state
         const bufferKey1 = `${receiverId}-${senderId}`;
         const bufferKey2 = `${senderId}-${receiverId}`;
-
-        console.log(
-          "[webrtc_offer] Clearing ICE candidate buffers:",
-          bufferKey1,
-          bufferKey2
-        );
         iceCandidateBuffers.delete(bufferKey1);
         iceCandidateBuffers.delete(bufferKey2);
 
         // Emit to all sockets of the receiver
         const receiverSockets = getSocketsForUser(receiverId);
-        console.log(
-          "[webrtc_offer] Receiver sockets found:",
-          receiverSockets?.size || 0
-        );
-
         if (receiverSockets && receiverSockets.size > 0) {
-          console.log(
-            `[webrtc_offer] Sending offer to receiverId=${receiverId}`
-          );
           io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
-        } else {
-          console.warn(
-            `[webrtc_offer] No sockets found for receiverId=${receiverId}`
-          );
         }
       }
     );
@@ -934,54 +880,39 @@ export default fp(async (fastify) => {
       }
     );
 
+    // 13. Answer Complete — forward to the opposite user
     socket.on(
-      "call_offer_resend",
-      ({
-        receiverId,
-        sdp,
-        callType,
-        callerInfo,
-      }: {
-        receiverId: string;
-        sdp: RTCSessionDescriptionInit;
-        callType: CallType;
-        callerInfo: any;
-      }) => {
+      "answer_complete",
+      ({ receiverId, data }: { receiverId: string; data: any }) => {
         const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        // Check if there's already a call attempt
-        const existingCall = activeCalls.get(senderId);
-        if (existingCall && existingCall.with === receiverId) {
-          const receiverSockets = getSocketsForUser(receiverId);
-          if (receiverSockets && receiverSockets.size > 0) {
-            io.to(receiverId).emit("call_incoming_with_offer", {
-              callerId: senderId,
-              callType,
-              callerInfo,
-              sdp,
-            });
-          }
+        const senderCall = activeCalls.get(senderId);
+        const receiverCall = activeCalls.get(receiverId);
+
+        if (
+          !senderCall ||
+          !receiverCall ||
+          senderCall.with !== receiverId ||
+          receiverCall.with !== senderId
+        ) {
+          console.warn("[answer_complete] Users not in active call, ignoring");
+          return;
         }
-      }
-    );
 
-    // 14. Request Offer (receiver asks for offer if missed)
-    socket.on("call_request_offer", ({ callerId }: { callerId: string }) => {
-      const receiverId = getUserId();
-      if (!receiverId || !callerId) return;
-
-      const callerData = activeCalls.get(callerId);
-      if (callerData && callerData.with === receiverId) {
-        // Ask caller to resend offer
-        const callerSockets = getSocketsForUser(callerId);
-        if (callerSockets && callerSockets.size > 0) {
-          io.to(callerId).emit("call_resend_offer_requested", {
-            receiverId,
+        const receiverSockets = getSocketsForUser(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          console.log(
+            `[answer_complete] Forwarding data from ${senderId} to ${receiverId}`,
+            data
+          );
+          io.to(receiverId).emit("answer_complete", {
+            senderId,
+            data,
           });
         }
       }
-    });
+    );
 
     //==========================================call end===========================================
 

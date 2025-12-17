@@ -743,142 +743,142 @@ export default fp(async (fastify) => {
     );
 
     // 12. Call End
-    // socket.on(
-    //   "call_end",
-    //   async ({
-    //     callerId,
-    //     receiverId,
-    //   }: {
-    //     callerId: string;
-    //     receiverId: string;
-    //   }) => {
-    //     const endedByUserId = getUserId();
-    //     if (!endedByUserId) return;
+    socket.on(
+      "call_end",
+      async ({
+        callerId,
+        receiverId,
+      }: {
+        callerId: string;
+        receiverId: string;
+      }) => {
+        const endedByUserId = getUserId();
+        if (!endedByUserId) return;
 
-    //     const callerCall = activeCalls.get(callerId);
-    //     const receiverCall = activeCalls.get(receiverId);
+        const callerCall = activeCalls.get(callerId);
+        const receiverCall = activeCalls.get(receiverId);
 
-    //     if (
-    //       callerCall &&
-    //       callerCall.with === receiverId &&
-    //       receiverCall &&
-    //       receiverCall.with === callerId
-    //     ) {
-    //       const wasAccepted = callerCall.status === "in_call";
-    //       const callType = callerCall.type;
-    //       activeCalls.delete(callerId);
-    //       activeCalls.delete(receiverId);
+        if (
+          callerCall &&
+          callerCall.with === receiverId &&
+          receiverCall &&
+          receiverCall.with === callerId
+        ) {
+          const wasAccepted = callerCall.status === "in_call";
+          const callType = callerCall.type;
+          activeCalls.delete(callerId);
+          activeCalls.delete(receiverId);
 
-    //       // Clear ICE buffers
-    //       clearIceCandidateBuffer(callerId, receiverId);
+          // Clear ICE buffers
+          clearIceCandidateBuffer(callerId, receiverId);
 
-    //       const opponentId = endedByUserId === callerId ? receiverId : callerId;
-    //       // Emit to all sockets of the opponent (except the current socket)
-    //       const opponentSockets = getSocketsForUser(opponentId);
-    //       if (opponentSockets && opponentSockets.size > 0) {
-    //         // Emit to userId room, which will reach all sockets of that user
-    //         io.to(opponentId).emit("call_ended", {
-    //           endedBy: endedByUserId,
-    //           reason: "ended_by_user",
-    //         });
-    //       }
+          const opponentId = endedByUserId === callerId ? receiverId : callerId;
+          // Emit to all sockets of the opponent (except the current socket)
+          const opponentSockets = getSocketsForUser(opponentId);
+          if (opponentSockets && opponentSockets.size > 0) {
+            // Emit to userId room, which will reach all sockets of that user
+            io.to(opponentId).emit("call_ended", {
+              endedBy: endedByUserId,
+              reason: "ended_by_user",
+            });
+          }
 
-    //       // Update call history status - COMPLETED if accepted, CANCELED if not
-    //       const callId = getCallHistoryForPair(callerId, receiverId);
-    //       if (callId) {
-    //         const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
-    //         updateCallHistory(
-    //           fastify.prisma as PrismaClient | undefined,
-    //           callId,
-    //           finalStatus as "COMPLETED" | "CANCELED",
-    //           new Date()
-    //         )
-    //           .then(() => {
-    //             clearCallHistoryForPair(callerId, receiverId);
-    //           })
-    //           .catch(() => {});
-    //       }
+          // Update call history status - COMPLETED if accepted, CANCELED if not
+          const callId = getCallHistoryForPair(callerId, receiverId);
+          if (callId) {
+            const finalStatus = wasAccepted ? "COMPLETED" : "CANCELED";
+            updateCallHistory(
+              fastify.prisma as PrismaClient | undefined,
+              callId,
+              finalStatus as "COMPLETED" | "CANCELED",
+              new Date()
+            )
+              .then(() => {
+                clearCallHistoryForPair(callerId, receiverId);
+              })
+              .catch(() => {});
+          }
 
-    //       // Send push notification to opponent
-    //       try {
-    //         const callerIdNumber = Number(callerId);
-    //         const receiverIdNumber = Number(receiverId);
-    //         const opponentIdNumber = Number(opponentId);
+          // Send push notification to opponent
+          try {
+            const callerIdNumber = Number(callerId);
+            const receiverIdNumber = Number(receiverId);
+            const opponentIdNumber = Number(opponentId);
 
-    //         if (
-    //           !Number.isNaN(callerIdNumber) &&
-    //           !Number.isNaN(receiverIdNumber)
-    //         ) {
-    //           const usersData = await prisma.user.findMany({
-    //             where: {
-    //               id: { in: [callerIdNumber, receiverIdNumber] },
-    //             },
-    //             select: {
-    //               id: true,
-    //               name: true,
-    //               avatar: true,
-    //               fcmToken: true,
-    //             },
-    //           });
+            if (
+              !Number.isNaN(callerIdNumber) &&
+              !Number.isNaN(receiverIdNumber)
+            ) {
+              const usersData = await prisma.user.findMany({
+                where: {
+                  id: { in: [callerIdNumber, receiverIdNumber] },
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  avatar: true,
+                  fcmToken: true,
+                },
+              });
 
-    //           const opponentData = usersData.find(
-    //             (u) => u.id === opponentIdNumber
-    //           );
-    //           const endedByUserData = usersData.find(
-    //             (u) => u.id === Number(endedByUserId)
-    //           );
+              const opponentData = usersData.find(
+                (u) => u.id === opponentIdNumber
+              );
+              const endedByUserData = usersData.find(
+                (u) => u.id === Number(endedByUserId)
+              );
 
-    //           if (
-    //             opponentData &&
-    //             opponentData.fcmToken &&
-    //             opponentData.fcmToken.length > 0
-    //           ) {
-    //             const endedByUserInfo = endedByUserData
-    //               ? {
-    //                   id: endedByUserData.id.toString(),
-    //                   name: endedByUserData.name || `User ${endedByUserId}`,
-    //                   avatar: FileService.avatarUrl(
-    //                     endedByUserData.avatar || ""
-    //                   ),
-    //                 }
-    //               : null;
+              if (
+                opponentData &&
+                opponentData.fcmToken &&
+                opponentData.fcmToken.length > 0
+              ) {
+                const endedByUserInfo = endedByUserData
+                  ? {
+                      id: endedByUserData.id.toString(),
+                      name: endedByUserData.name || `User ${endedByUserId}`,
+                      avatar: FileService.avatarUrl(
+                        endedByUserData.avatar || ""
+                      ),
+                    }
+                  : null;
 
-    //             const pushData: Record<string, string> = {
-    //               type: "call_ended",
-    //               endedBy: endedByUserId,
-    //               callType: callType,
-    //               reason: wasAccepted ? "completed" : "canceled",
-    //             };
+                const pushData: Record<string, string> = {
+                  type: "call_ended",
+                  endedBy: endedByUserId,
+                  callType: callType,
+                  reason: wasAccepted ? "completed" : "canceled",
+                };
 
-    //             if (endedByUserInfo) {
-    //               pushData.endedByUser = JSON.stringify(endedByUserInfo);
-    //             }
+                if (endedByUserInfo) {
+                  pushData.endedByUser = JSON.stringify(endedByUserInfo);
+                }
 
-    //             const pushPromises: Promise<any>[] = [];
-    //             const validTokens = opponentData.fcmToken.filter(
-    //               (token): token is string => Boolean(token)
-    //             );
+                const pushPromises: Promise<any>[] = [];
+                const validTokens = opponentData.fcmToken.filter(
+                  (token): token is string => Boolean(token)
+                );
 
-    //             for (const token of validTokens) {
-    //               pushPromises.push(
-    //                 fastify.sendDataPush(token, pushData).catch((error) => {
-    //                   return { success: false, error };
-    //                 })
-    //               );
-    //             }
+                for (const token of validTokens) {
+                  pushPromises.push(
+                    fastify.sendDataPush(token, pushData).catch((error) => {
+                      return { success: false, error };
+                    })
+                  );
+                }
 
-    //             if (pushPromises.length > 0) {
-    //               Promise.allSettled(pushPromises)
-    //                 .then(() => {})
-    //                 .catch(() => {});
-    //             }
-    //           }
-    //         }
-    //       } catch (error: any) {}
-    //     } else {
-    //     }
-    //   }
-    // );
+                if (pushPromises.length > 0) {
+                  Promise.allSettled(pushPromises)
+                    .then(() => {})
+                    .catch(() => {});
+                }
+              }
+            }
+          } catch (error: any) {}
+        } else {
+        }
+      }
+    );
 
     socket.on(
       "answer_complete",

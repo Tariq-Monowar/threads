@@ -882,15 +882,13 @@ export default fp(async (fastify) => {
 
     socket.on(
       "answer_complete",
-      ({ receiverId, callerId, data }: { receiverId: string; callerId: string; data: any }) => {
+      ({ receiverId, data }: { receiverId: string; data: any }) => {
         const senderId = getUserId();
 
         if (!senderId || !receiverId) {
           console.log("[answer_complete] Missing sender or receiver ID");
           return;
         }
-
-        clearIceCandidateBuffer(callerId, receiverId);
 
         io.to(receiverId).emit("answer_complete", {
           senderId,
@@ -956,42 +954,31 @@ export default fp(async (fastify) => {
           callType,
         });
 
-        if (!senderId || !receiverId) {
-          console.warn("[CALL][OFFER_RESEND] Missing senderId or receiverId");
-          return;
-        }
+        if (!senderId || !receiverId) return;
 
         const existingCall = activeCalls.get(senderId);
-
-        if (!existingCall) {
-          console.warn("[CALL][OFFER_RESEND] No active call found for sender", {
-            senderId,
-          });
-          return;
-        }
-
-        if (existingCall.with !== receiverId) {
-          console.warn("[CALL][OFFER_RESEND] Receiver mismatch", {
-            expected: existingCall.with,
-            actual: receiverId,
-          });
-          return;
-        }
+        if (!existingCall || existingCall.with !== receiverId) return;
 
         const receiverSockets = getSocketsForUser(receiverId);
+        if (!receiverSockets || receiverSockets.size === 0) return;
 
-        if (!receiverSockets || receiverSockets.size === 0) {
-          console.warn("[CALL][OFFER_RESEND] Receiver is offline", {
-            receiverId,
-          });
-          return;
-        }
+        // 🔥 SOFT RESET (same as call_end but without deleting call)
+        clearIceCandidateBuffer(senderId, receiverId);
 
-        console.log("[CALL][OFFER_RESEND] Resending offer to receiver", {
-          receiverId,
-          socketCount: receiverSockets.size,
+        // Reset state to calling (important)
+        activeCalls.set(senderId, {
+          ...existingCall,
+          status: "calling",
+        });
+        activeCalls.set(receiverId, {
+          with: senderId,
+          status: "calling",
+          type: existingCall.type,
         });
 
+        console.log("[CALL][OFFER_RESEND] Soft reset done, resending offer");
+
+        // 🔁 RESEND OFFER
         io.to(receiverId).emit("call_offer_resend", {
           callerId: senderId,
           callType,

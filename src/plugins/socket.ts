@@ -882,12 +882,15 @@ export default fp(async (fastify) => {
 
     socket.on(
       "answer_complete",
-      ({ receiverId, data }: { receiverId: string; data: any }) => {
+      ({ receiverId, callerId, data }: { receiverId: string; callerId: string; data: any }) => {
         const senderId = getUserId();
+
         if (!senderId || !receiverId) {
           console.log("[answer_complete] Missing sender or receiver ID");
           return;
         }
+
+        clearIceCandidateBuffer(callerId, receiverId);
 
         io.to(receiverId).emit("answer_complete", {
           senderId,

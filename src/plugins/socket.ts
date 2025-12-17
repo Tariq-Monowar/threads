@@ -889,7 +889,7 @@ export default fp(async (fastify) => {
 
         const senderCall = activeCalls.get(senderId);
         const receiverCall = activeCalls.get(receiverId);
-
+        console.log(receiverId, data);
         if (
           !senderCall ||
           !receiverCall ||
@@ -915,6 +915,7 @@ export default fp(async (fastify) => {
     );
 
     // 14. Call Offer Resend (caller resends offer if missed)
+    // 14. Call Offer Resend (caller resends offer if missed)
     socket.on(
       "call_offer_resend",
       ({
@@ -929,37 +930,106 @@ export default fp(async (fastify) => {
         callerInfo: any;
       }) => {
         const senderId = getUserId();
-        if (!senderId || !receiverId) return;
+
+        console.log("[CALL][OFFER_RESEND] Incoming request", {
+          senderId,
+          receiverId,
+          callType,
+        });
+
+        if (!senderId || !receiverId) {
+          console.warn("[CALL][OFFER_RESEND] Missing senderId or receiverId");
+          return;
+        }
 
         const existingCall = activeCalls.get(senderId);
-        if (existingCall && existingCall.with === receiverId) {
-          const receiverSockets = getSocketsForUser(receiverId);
-          if (receiverSockets && receiverSockets.size > 0) {
-            io.to(receiverId).emit("call_offer_resend", {
-              callerId: senderId,
-              callType,
-              callerInfo,
-              sdp,
-            });
-          }
+
+        if (!existingCall) {
+          console.warn("[CALL][OFFER_RESEND] No active call found for sender", {
+            senderId,
+          });
+          return;
         }
+
+        if (existingCall.with !== receiverId) {
+          console.warn("[CALL][OFFER_RESEND] Receiver mismatch", {
+            expected: existingCall.with,
+            actual: receiverId,
+          });
+          return;
+        }
+
+        const receiverSockets = getSocketsForUser(receiverId);
+
+        if (!receiverSockets || receiverSockets.size === 0) {
+          console.warn("[CALL][OFFER_RESEND] Receiver is offline", {
+            receiverId,
+          });
+          return;
+        }
+
+        console.log("[CALL][OFFER_RESEND] Resending offer to receiver", {
+          receiverId,
+          socketCount: receiverSockets.size,
+        });
+
+        io.to(receiverId).emit("call_offer_resend", {
+          callerId: senderId,
+          callType,
+          callerInfo,
+          sdp,
+        });
       }
     );
 
     // 15. Request Offer (receiver asks for offer if missed)
     socket.on("call_answer_recent", ({ callerId }: { callerId: string }) => {
       const receiverId = getUserId();
-      if (!receiverId || !callerId) return;
+
+      console.log("[CALL][ANSWER_RECENT] Receiver requested recent offer", {
+        receiverId,
+        callerId,
+      });
+
+      if (!receiverId || !callerId) {
+        console.warn("[CALL][ANSWER_RECENT] Missing receiverId or callerId");
+        return;
+      }
 
       const callerData = activeCalls.get(callerId);
-      if (callerData && callerData.with === receiverId) {
-        const callerSockets = getSocketsForUser(callerId);
-        if (callerSockets && callerSockets.size > 0) {
-          io.to(callerId).emit("call_answer_recent", {
-            receiverId,
-          });
-        }
+
+      if (!callerData) {
+        console.warn("[CALL][ANSWER_RECENT] No active call found for caller", {
+          callerId,
+        });
+        return;
       }
+
+      if (callerData.with !== receiverId) {
+        console.warn("[CALL][ANSWER_RECENT] Call partner mismatch", {
+          expected: callerData.with,
+          actual: receiverId,
+        });
+        return;
+      }
+
+      const callerSockets = getSocketsForUser(callerId);
+
+      if (!callerSockets || callerSockets.size === 0) {
+        console.warn("[CALL][ANSWER_RECENT] Caller is offline", {
+          callerId,
+        });
+        return;
+      }
+
+      console.log("[CALL][ANSWER_RECENT] Notifying caller to resend offer", {
+        callerId,
+        socketCount: callerSockets.size,
+      });
+
+      io.to(callerId).emit("call_answer_recent", {
+        receiverId,
+      });
     });
 
     //==========================================call end===========================================

@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { FileService } from "../../../../utils/fileService";
 import { transformMessage } from "../../../../utils/message.utils";
+import { baseUrl, getImageUrl } from "../../../../utils/baseurl";
 
 export const createConversation = async (request, reply) => {
   try {
@@ -297,7 +298,6 @@ export const createConversation = async (request, reply) => {
   }
 };
 
-
 export const deleteConversationForMe = async (request, reply) => {
   try {
     const { conversationId } = request.params;
@@ -335,5 +335,168 @@ export const deleteConversationForMe = async (request, reply) => {
     return reply
       .status(500)
       .send({ success: false, message: "Failed to delete conversation" });
+  }
+};
+export const getConversationsByUserId = async (request, reply) => {
+  try {
+    const message = request.query.message; // Fixed: query not quary
+    const { myId, otherId } = request.body;
+    const prisma = request.server.prisma;
+
+    if (!myId || !otherId) {
+      return reply.status(400).send({
+        success: false,
+        message: "myId and otherId are required!",
+      });
+    }
+
+    const currentUserId = parseInt(myId);
+    const otherUserId = parseInt(otherId);
+
+    if (isNaN(currentUserId) || isNaN(otherUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user IDs!",
+      });
+    }
+
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: currentUserId, isDeleted: false } } },
+          { members: { some: { userId: otherId, isDeleted: false } } },
+        ],
+        members: {
+          every: {
+            userId: { in: [currentUserId, otherUserId] },
+          },
+        },
+      },
+      include: {
+        members: {
+          where: { isDeleted: false },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+          },
+        },
+        messages: {
+          where: {
+            NOT: { deletedForUsers: { has: currentUserId } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: message ? parseInt(message) : 50, // Parse to integer
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+              },
+            },
+            MessageFile: true,
+          },
+        },
+      },
+    });
+
+    if (!conversation) {
+      return reply.status(404).send({
+        success: false,
+        message: "Chat does not exist",
+      });
+    }
+
+    const formatUserWithAvatar = (user) =>
+      user
+        ? {
+            ...user,
+            avatar: user.avatar ? FileService.avatarUrl(user.avatar) : null,
+          }
+        : null;
+
+    const processConversationMembers = (members, isGroup, currentUserId) => {
+      const formatted = members.map((m) => ({
+        ...m,
+        user: formatUserWithAvatar(m.user),
+      }));
+
+      if (!isGroup) {
+        return formatted.filter((m) => m.userId !== currentUserId);
+      }
+
+      return formatted;
+    };
+
+    const getParticipantIds = (members) =>
+      members.map((m) => m.userId).filter(Boolean);
+
+    const unreadCount = await prisma.message.count({
+      where: {
+        conversationId: conversation.id,
+        userId: { not: currentUserId },
+        isRead: false,
+        NOT: { deletedForUsers: { has: currentUserId } },
+      },
+    });
+
+    const participantIds = getParticipantIds(conversation.members);
+
+    // Format MessageFile with proper fileUrl
+    const formatMessageFiles = (messageFiles: any[]) => {
+      if (!messageFiles || messageFiles.length === 0) return [];
+
+      return messageFiles.map((file) => ({
+        id: file.id,
+        userId: file.userId,
+        messageId: file.messageId,
+        fileUrl: getImageUrl(file.fileUrl || ""),
+        fileType: file.fileType,
+        fileSize: file.fileSize,
+        fileExtension: file.fileExtension,
+        createdAt: file.createdAt,
+        updatedAt: file.updatedAt,
+      }));
+    };
+
+    // Transform messages with formatted files
+    const transformedMessages = conversation.messages.map((message) => {
+      const baseTransformedMessage = transformMessage(message, participantIds);
+      return {
+        ...baseTransformedMessage,
+        MessageFile: formatMessageFiles(message.MessageFile || []),
+      };
+    });
+
+    const transformedConversation = {
+      ...conversation,
+      members: processConversationMembers(
+        conversation.members,
+        conversation.isGroup,
+        currentUserId
+      ),
+      messages: transformedMessages,
+      avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
+      unreadCount,
+    };
+
+    return reply.send({
+      success: true,
+      data: transformedConversation,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to get conversation",
+    });
   }
 };

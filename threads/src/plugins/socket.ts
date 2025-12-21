@@ -148,7 +148,10 @@ export default fp(async (fastify) => {
         console.log("conversationId", conversationId);
         console.log("userId", userId);
         const userIdStr = userId.toString();
+        
+        console.log("📞 [SOCKET] About to call joinConversationRoom...");
         joinConversationRoom(userIdStr, conversationId);
+        console.log("📞 [SOCKET] joinConversationRoom call completed");
 
         socket.emit("conversation_joined", {
           conversationId,
@@ -229,7 +232,9 @@ export default fp(async (fastify) => {
         console.log(`[Leave Room] User ${userIdStr} was in room ${conversationId} before leave: ${wasInRoomBefore}`);
         
         // Remove user from conversation room
+        console.log("📞 [SOCKET] About to call leaveConversationRoom...");
         const wasRemoved = leaveConversationRoom(userIdStr, conversationId);
+        console.log("📞 [SOCKET] leaveConversationRoom call completed, result:", wasRemoved);
         
         // Verify user was removed (for debugging) - check multiple times to ensure consistency
         const stillInRoom1 = isUserInConversationRoom(userIdStr, conversationId);

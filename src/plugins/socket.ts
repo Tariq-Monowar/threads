@@ -223,7 +223,7 @@ export default fp(async (fastify) => {
           userId: userIdStr,
         });
 
-        // Mark messages from OTHER members as read when user joins (async, non-blocking)
+        // Mark messages as read when user joins (async, non-blocking)
         setImmediate(async () => {
           try {
             if (!fastify.prisma) {
@@ -241,7 +241,61 @@ export default fp(async (fastify) => {
               return;
             }
 
-            // Filter: Only find unread messages from OTHER members (NOT from the user who joined)
+            // Check if this is a self-conversation (all messages are from the same user)
+            // Efficient check: see if there are any messages from other users
+            const messagesFromOthers = await (
+              fastify.prisma as any
+            ).message.findFirst({
+              where: {
+                conversationId,
+                NOT: {
+                  userId: userIdInt,
+                },
+              },
+              select: {
+                id: true,
+              },
+            });
+
+            // If no messages from others, it's a self-conversation
+            // Mark ALL messages (including own) as read and delivered
+            if (!messagesFromOthers) {
+              // Self-conversation: mark all messages as read/delivered
+              const [updateResult, members] = await Promise.all([
+                (fastify.prisma as any).message.updateMany({
+                  where: {
+                    conversationId,
+                  },
+                  data: {
+                    isRead: true,
+                    isDelivered: true,
+                  },
+                }),
+                fastify.prisma.conversationMember.findMany({
+                  where: {
+                    conversationId,
+                    isDeleted: false,
+                  },
+                  select: {
+                    userId: true,
+                  },
+                }),
+              ]);
+
+              // Notify user about the update
+              if (updateResult.count > 0) {
+                socket.emit("messages_marked_read", {
+                  success: true,
+                  conversationId,
+                  markedBy: userIdInt,
+                  markedAsRead: true,
+                  isSelfConversation: true,
+                });
+              }
+              return;
+            }
+
+            // Normal conversation: mark messages from OTHER members only
             const unreadMessages = await (
               fastify.prisma as any
             ).message.findMany({
@@ -249,7 +303,7 @@ export default fp(async (fastify) => {
                 conversationId,
                 isRead: false,
                 NOT: {
-                  userId: userIdInt, // Critical filter: exclude sender's own messages
+                  userId: userIdInt,
                 },
               },
               select: {
@@ -267,12 +321,12 @@ export default fp(async (fastify) => {
                 conversationId,
                 isRead: false,
                 NOT: {
-                  userId: userIdInt, // Critical filter: only messages from other members
+                  userId: userIdInt,
                 },
               },
               data: {
                 isRead: true,
-                isDelivered: true, // If message is read, it must be delivered
+                isDelivered: true,
               },
             });
 
@@ -303,7 +357,9 @@ export default fp(async (fastify) => {
                 );
               }
             });
-          } catch (error: any) {}
+          } catch (error: any) {
+            // Silent error handling - don't break the join flow
+          }
         });
       }
     );
@@ -962,10 +1018,8 @@ export default fp(async (fastify) => {
         const receiverSockets = getSocketsForUser(receiverId);
         if (!receiverSockets || receiverSockets.size === 0) return;
 
-        // 🔥 SOFT RESET (same as call_end but without deleting call)
         clearIceCandidateBuffer(senderId, receiverId);
 
-        // Reset state to calling (important)
         activeCalls.set(senderId, {
           ...existingCall,
           status: "calling",

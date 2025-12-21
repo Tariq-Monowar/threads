@@ -224,17 +224,37 @@ export default fp(async (fastify) => {
         // Convert userId to string for consistency (same as join_conversation)
         const userIdStr = userId.toString();
         
+        // Check if user is in room before leaving (for debugging)
+        const wasInRoomBefore = isUserInConversationRoom(userIdStr, conversationId);
+        console.log(`[Leave Room] User ${userIdStr} was in room ${conversationId} before leave: ${wasInRoomBefore}`);
+        
         // Remove user from conversation room
         const wasRemoved = leaveConversationRoom(userIdStr, conversationId);
         
-        // Verify user was removed (for debugging)
-        const stillInRoom = isUserInConversationRoom(userIdStr, conversationId);
-        if (wasRemoved && !stillInRoom) {
-          console.log(`[Leave Room] SUCCESS: User ${userIdStr} successfully removed from room ${conversationId}`);
-        } else if (stillInRoom) {
-          console.warn(`[Leave Room] WARNING: User ${userIdStr} still appears to be in room ${conversationId} after leaving attempt`);
-        } else if (!wasRemoved) {
-          console.warn(`[Leave Room] WARNING: User ${userIdStr} was not in room ${conversationId} (may have already left)`);
+        // Verify user was removed (for debugging) - check multiple times to ensure consistency
+        const stillInRoom1 = isUserInConversationRoom(userIdStr, conversationId);
+        const stillInRoom2 = isUserInConversationRoom(userIdStr, conversationId); // Double check
+        
+        // Get current room state for verification
+        const currentRoomUsers = getUsersInConversationRoom(conversationId);
+        const isInRoomList = currentRoomUsers.includes(userIdStr);
+        
+        if (wasRemoved && !stillInRoom1 && !stillInRoom2 && !isInRoomList) {
+          console.log(`[Leave Room] ✅ SUCCESS: User ${userIdStr} successfully removed from room ${conversationId}`);
+          console.log(`[Leave Room] Current users in room: [${currentRoomUsers.join(", ")}]`);
+        } else if (stillInRoom1 || stillInRoom2 || isInRoomList) {
+          console.error(`[Leave Room] ❌ ERROR: User ${userIdStr} STILL in room ${conversationId} after leaving!`);
+          console.error(`[Leave Room] wasRemoved: ${wasRemoved}, stillInRoom1: ${stillInRoom1}, stillInRoom2: ${stillInRoom2}, isInRoomList: ${isInRoomList}`);
+          console.error(`[Leave Room] Current room users: [${currentRoomUsers.join(", ")}]`);
+          
+          // Force remove if still present (safety measure)
+          if (wasInRoomBefore) {
+            console.warn(`[Leave Room] Attempting force remove for user ${userIdStr}`);
+            const forceRemoved = leaveConversationRoom(userIdStr, conversationId);
+            console.warn(`[Leave Room] Force remove result: ${forceRemoved}`);
+          }
+        } else if (!wasRemoved && !wasInRoomBefore) {
+          console.log(`[Leave Room] ℹ️ User ${userIdStr} was not in room ${conversationId} (already left or never joined)`);
         }
         
         socket.emit("conversation_left", { conversationId, userId: userIdStr });

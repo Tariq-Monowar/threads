@@ -56,7 +56,9 @@ export const createConversationRoomsStore = () => {
   const getUsersInConversationRoom = (conversationId: string): string[] => {
     const room = conversationRooms.get(conversationId);
     const users = room ? Array.from(room) : [];
+    console.log("getUsersInConversationRoom.txt", "============Heat==============");
     console.log(`[Get Room] Conversation ${conversationId} has ${users.length} users:`, users);
+    console.log(`[Get Room] Room exists: ${!!room}, Room size: ${room?.size || 0}`);
     return users;
   };
 

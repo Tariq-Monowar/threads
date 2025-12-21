@@ -209,6 +209,7 @@ export const sendMessage = async (request, reply) => {
 
     // Check which users are currently in the conversation room
     // This is critical for marking messages as read/delivered when users are active in the room
+    // IMPORTANT: Get fresh room state every time to avoid stale data
     const usersInRoom = request.server.getUsersInConversationRoom
       ? request.server.getUsersInConversationRoom(conversationId)
       : [];
@@ -245,14 +246,30 @@ export const sendMessage = async (request, reply) => {
 
     // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room
     // When multiple people are in the same conversation room, messages should be marked as delivered and read
+    // IMPORTANT: Double-check each user is actually in room using isUserInConversationRoom for accuracy
     const recipientsInRoom = transactionResult.members.filter((member) => {
       if (!member.userId || member.userId === userIdInt) {
         return false;
       }
-      const isInRoom = usersInRoomSet.has(member.userId);
+      
+      // First check: Use the Set for fast lookup
+      const isInRoomSet = usersInRoomSet.has(member.userId);
+      
+      // Second check: Verify using isUserInConversationRoom function for accuracy
+      // This ensures we're checking the actual current state, not cached data
+      const isInRoomVerified = request.server.isUserInConversationRoom
+        ? request.server.isUserInConversationRoom(member.userId.toString(), conversationId)
+        : isInRoomSet;
+      
+      // Only mark as in room if BOTH checks pass
+      const isInRoom = isInRoomSet && isInRoomVerified;
+      
       if (isInRoom) {
-        request.log.info(`✅ Recipient ${member.userId} is in room ${conversationId}`);
+        request.log.info(`✅ Recipient ${member.userId} is verified in room ${conversationId}`);
+      } else if (isInRoomSet && !isInRoomVerified) {
+        request.log.warn(`⚠️ Recipient ${member.userId} found in Set but NOT verified in room ${conversationId} - NOT marking as read`);
       }
+      
       return isInRoom;
     });
 
@@ -268,41 +285,53 @@ export const sendMessage = async (request, reply) => {
         .map((m) => m.userId)
         .filter((id): id is number => typeof id === "number");
       
-      // 🔥 CRITICAL: Double-check RIGHT BEFORE marking as read/delivered
-      // This prevents race condition where user leaves between initial check and DB update
-      const finalVerification = recipientsInRoomIds.filter((recipientId) => {
-        if (!request.server.isUserInConversationRoom) {
-          return false;
-        }
-        const stillInRoom = request.server.isUserInConversationRoom(
-          recipientId.toString(),
-          conversationId
-        );
+      // FINAL VERIFICATION: Re-check room state right before marking to catch any race conditions
+      // This ensures users haven't left the room between the initial check and the database update
+      const finalRecipientsInRoom = recipientsInRoomIds.filter((recipientId) => {
+        const stillInRoom = request.server.isUserInConversationRoom
+          ? request.server.isUserInConversationRoom(recipientId.toString(), conversationId)
+          : false;
+        
         if (!stillInRoom) {
           request.log.warn(
-            `⚠️ Recipient ${recipientId} left room ${conversationId} before message was marked as read - excluding from read/delivered status`
+            `⚠️ Recipient ${recipientId} left room ${conversationId} before marking message as read - skipping`
           );
         }
         return stillInRoom;
       });
       
-      // Only mark as read/delivered if recipients are STILL in room after final verification
-      if (finalVerification.length > 0) {
-        // Update recipientsInRoomIds to only include those still in room after verification
-        recipientsInRoomIds = finalVerification;
-        
+      // Only mark as read if recipients are still in room
+      if (finalRecipientsInRoom.length === 0) {
+        request.log.warn(
+          `⚠️ All recipients left room ${conversationId} before marking message ${transactionResult.message.id} as read - NOT marking as read`
+        );
+      } else if (finalRecipientsInRoom.length < recipientsInRoomIds.length) {
+        request.log.warn(
+          `⚠️ Some recipients left room before marking. Original: [${recipientsInRoomIds.join(", ")}], Still in room: [${finalRecipientsInRoom.join(", ")}]`
+        );
+      }
+      
+      // Update recipientsInRoomIds to only include those still in room
+      recipientsInRoomIds = finalRecipientsInRoom;
+      
+      if (recipientsInRoomIds.length === 0) {
+        // No recipients in room anymore, don't mark as read
         request.log.info(
-          `📨 Marking message ${transactionResult.message.id} as read/delivered for ${finalVerification.length} recipients still in room: [${finalVerification.join(", ")}] (originally ${recipientsInRoom.length} were in room)`
+          `ℹ️ No recipients in room for message ${transactionResult.message.id} - keeping as unread/undelivered`
+        );
+      } else {
+        request.log.info(
+          `📨 Marking message ${transactionResult.message.id} as read/delivered for ${recipientsInRoomIds.length} recipients still in room: [${recipientsInRoomIds.join(", ")}]`
         );
         
         try {
           // Update message to mark as read and delivered
           const updateResult = await prisma.message.update({
-            where: { id: transactionResult.message.id },
-            data: { 
-              isRead: true, 
-              isDelivered: true 
-            },
+          where: { id: transactionResult.message.id },
+          data: { 
+            isRead: true, 
+            isDelivered: true 
+          },
           include: {
             user: {
               select: {
@@ -334,13 +363,7 @@ export const sendMessage = async (request, reply) => {
         request.log.error(`Error stack: ${error.stack}`);
         // Keep original message if update fails
         messageForResponse = transactionResult.message;
-      }
-      } else {
-        // All recipients left the room before we could mark as read
-        request.log.warn(
-          `⚠️ All recipients left room ${conversationId} before message ${transactionResult.message.id} could be marked as read. Message will remain unread/undelivered.`
-        );
-        // Message will remain unread/undelivered
+        }
       }
     } else {
       request.log.warn(

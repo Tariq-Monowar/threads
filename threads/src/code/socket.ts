@@ -220,25 +220,25 @@ export default fp(async (fastify) => {
         console.log("conversation_left", "============Heat==============");
         console.log("conversationId", conversationId);
         console.log("userId", userId);
-        
-        // Convert userId to string for consistency (same as join_conversation)
-        const userIdStr = userId.toString();
-        
-        // Remove user from conversation room
-        const wasRemoved = leaveConversationRoom(userIdStr, conversationId);
-        
-        // Verify user was removed (for debugging)
-        const stillInRoom = isUserInConversationRoom(userIdStr, conversationId);
-        if (wasRemoved && !stillInRoom) {
-          console.log(`[Leave Room] SUCCESS: User ${userIdStr} successfully removed from room ${conversationId}`);
-        } else if (stillInRoom) {
-          console.warn(`[Leave Room] WARNING: User ${userIdStr} still appears to be in room ${conversationId} after leaving attempt`);
-        } else if (!wasRemoved) {
-          console.warn(`[Leave Room] WARNING: User ${userIdStr} was not in room ${conversationId} (may have already left)`);
-        }
-        
-        socket.emit("conversation_left", { conversationId, userId: userIdStr });
-     
+
+        leaveConversationRoom(userId, conversationId);
+        socket.emit("conversation_left", { conversationId, userId });
+        try {
+          const userIdInt = parseInt(userId);
+          if (!Number.isNaN(userIdInt)) {
+            const updateResult = await fastify.prisma.message.updateMany({
+              where: {
+                conversationId,
+                isRead: true,
+                NOT: { userId: userIdInt },
+              },
+              data: {
+                isRead: false,
+                isDelivered: false,
+              },
+            });
+          }
+        } catch (error: any) {}
       }
     );
 

@@ -14,23 +14,31 @@ export const createConversationRoomsStore = () => {
     console.log(`[Join Room] Total users in room now: ${room.size}`, Array.from(room));
   };
 
-  const leaveConversationRoom = (userId: string, conversationId: string) => {
+  const leaveConversationRoom = (userId: string, conversationId: string): boolean => {
     const room = conversationRooms.get(conversationId);
     if (room) {
       const wasInRoom = room.has(userId);
-      room.delete(userId);
+      const roomSizeBefore = room.size;
       
-      console.log(`[Leave Room] User ${userId} leaving conversation ${conversationId}`);
-      console.log(`[Leave Room] Was in room: ${wasInRoom}, Room size before: ${room.size + 1}, Room size after: ${room.size}`);
-      
-      if (room.size === 0) {
-        conversationRooms.delete(conversationId);
-        console.log(`[Leave Room] Room ${conversationId} is now empty - deleted`);
+      if (wasInRoom) {
+        room.delete(userId);
+        console.log(`[Leave Room] User ${userId} leaving conversation ${conversationId}`);
+        console.log(`[Leave Room] Room size before: ${roomSizeBefore}, Room size after: ${room.size}`);
+        
+        if (room.size === 0) {
+          conversationRooms.delete(conversationId);
+          console.log(`[Leave Room] Room ${conversationId} is now empty - deleted`);
+        } else {
+          console.log(`[Leave Room] Remaining users in room:`, Array.from(room));
+        }
+        return true;
       } else {
-        console.log(`[Leave Room] Remaining users in room:`, Array.from(room));
+        console.log(`[Leave Room] User ${userId} was not in room ${conversationId}`);
+        return false;
       }
     } else {
       console.log(`[Leave Room] Room ${conversationId} does not exist`);
+      return false;
     }
   };
 

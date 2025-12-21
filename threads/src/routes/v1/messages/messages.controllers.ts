@@ -80,11 +80,12 @@ export const deleteMessage = async (request, reply) => {
 
 export const sendMessage = async (request, reply) => {
   try {
+    // Step 1: Get data from request
     const { conversationId, userId, text } = request.body;
     const prisma = request.server.prisma;
-    const files = (request.files as any[]) || [];
+    const uploadedFiles = (request.files as any[]) || [];
 
-    // Validate required fields
+    // Step 2: Validate input
     if (!conversationId || !userId) {
       return reply.status(400).send({
         success: false,
@@ -92,21 +93,24 @@ export const sendMessage = async (request, reply) => {
       });
     }
 
-    if ((!text || text.trim() === "") && files.length === 0) {
+    const hasText = text && text.trim() !== "";
+    const hasFiles = uploadedFiles.length > 0;
+    if (!hasText && !hasFiles) {
       return reply.status(400).send({
         success: false,
         message: "Either text or at least one file is required!",
       });
     }
 
-    const userIdInt = parseInt(userId);
+    const senderId = parseInt(userId);
 
-    // Get conversation and members first (needed for room check)
+    // Step 3: Get conversation info and all members
     const { conversation, members } = await prisma.$transaction(async (tx) => {
+      // Check if conversation exists and user has access
       const conv = await tx.conversation.findFirst({
         where: {
           id: conversationId,
-          members: { some: { userId: userIdInt, isDeleted: false } },
+          members: { some: { userId: senderId, isDeleted: false } },
         },
         select: { id: true, isGroup: true, name: true, allowMemberMessage: true },
       });
@@ -115,7 +119,8 @@ export const sendMessage = async (request, reply) => {
         throw new Error("Conversation not found or you don't have access to it");
       }
 
-      const mems = await tx.conversationMember.findMany({
+      // Get all members of this conversation
+      const allMembers = await tx.conversationMember.findMany({
         where: { conversationId, isDeleted: false },
         select: {
           userId: true,
@@ -124,122 +129,158 @@ export const sendMessage = async (request, reply) => {
         },
       });
 
-      return { conversation: conv, members: mems };
+      return { conversation: conv, members: allMembers };
     });
 
-    // Check room status BEFORE creating message (O(1) lookup with Set)
-    // Convert conversationId to string to match socket room storage format
-    const conversationIdStr = String(conversationId);
-    const usersInRoom = (request.server.getUsersInConversationRoom?.(conversationIdStr) || [])
-      .map((id) => {
-        const num = parseInt(id, 10);
-        return isNaN(num) ? null : num;
-      })
-      .filter((id): id is number => id !== null);
+    // Step 4: Check if any receiver is currently in the conversation room
+    const conversationIdAsString = String(conversationId);
+    const userIdsInRoom = request.server.getUsersInConversationRoom?.(conversationIdAsString) || [];
+    
+    // Debug: Log room state
+    console.log("=== Room Check ===");
+    console.log("Conversation ID:", conversationIdAsString);
+    console.log("Users in room:", userIdsInRoom);
+    console.log("Sender ID:", senderId);
+    
+    // Check if any receiver (not sender) is in the room
+    let hasAnyReceiverInRoom = false;
+    
+    // If room is empty, no one is in room
+    if (userIdsInRoom.length === 0) {
+      console.log("Room is empty - no receivers in room");
+      hasAnyReceiverInRoom = false;
+    } else {
+      // Check each member
+      for (const member of members) {
+        // Skip sender
+        if (!member.userId || member.userId === senderId) {
+          continue;
+        }
+        
+        // Convert member ID to string for comparison
+        const memberIdAsString = String(member.userId);
+        
+        // Check if this receiver is in the room
+        const isInRoom = userIdsInRoom.includes(memberIdAsString);
+        console.log(`Receiver ${member.userId} (${memberIdAsString}) in room?`, isInRoom);
+        
+        if (isInRoom) {
+          hasAnyReceiverInRoom = true;
+          console.log(`✓ Found receiver ${member.userId} in room`);
+          break; // Found one, no need to check more
+        }
+      }
+    }
 
-    const usersInRoomSet = new Set(usersInRoom);
-    const recipientsInRoom = members
-      .filter((m) => m.userId && m.userId !== userIdInt && usersInRoomSet.has(m.userId))
-      .map((m) => m.userId!)
-      .filter((id): id is number => typeof id === "number");
+    console.log("Final result - shouldMarkAsRead:", hasAnyReceiverInRoom);
+    console.log("==================");
 
-    // Determine read/delivered status based on room check (avoid extra DB update)
-    const hasRecipientsInRoom = recipientsInRoom.length > 0;
+    // Step 5: If any receiver is in room, mark message as read/delivered
+    const shouldMarkAsRead = hasAnyReceiverInRoom;
 
-    // Create message with correct status from the start
-    const { message: finalMessage } = await prisma.$transaction(async (tx) => {
-      const fileData = files.map((file) => ({
-        userId: userIdInt,
-        fileUrl: file.filename,
-        fileType: file.mimetype || null,
-        fileSize: typeof file.size === "number" ? file.size : null,
-        fileExtension: path.extname(file.originalname || "").replace(".", "") || null,
-      }));
+    // Step 6: Prepare file data if files were uploaded
+    const fileDataForDatabase = uploadedFiles.map((file) => ({
+      userId: senderId,
+      fileUrl: file.filename,
+      fileType: file.mimetype || null,
+      fileSize: typeof file.size === "number" ? file.size : null,
+      fileExtension: path.extname(file.originalname || "").replace(".", "") || null,
+    }));
 
-      const [msg] = await Promise.all([
-        tx.message.create({
-          data: {
-            text: text?.trim() || null,
-            userId: userIdInt,
-            conversationId,
-            isRead: hasRecipientsInRoom,
-            isDelivered: hasRecipientsInRoom,
-            ...(fileData.length ? { MessageFile: { create: fileData } } : {}),
-          },
-          include: {
-            user: { select: { id: true, name: true, email: true, avatar: true } },
-            MessageFile: true,
-          },
-        }),
-        tx.conversation.update({
-          where: { id: conversationId },
-          data: { updatedAt: new Date() },
-        }),
-      ]);
+    // Step 7: Create the message in database
+    const createdMessage = await prisma.$transaction(async (tx) => {
+      const newMessage = await tx.message.create({
+        data: {
+          text: hasText ? text.trim() : null,
+          userId: senderId,
+          conversationId,
+          isRead: shouldMarkAsRead,
+          isDelivered: shouldMarkAsRead,
+          ...(fileDataForDatabase.length > 0 ? { MessageFile: { create: fileDataForDatabase } } : {}),
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true, avatar: true } },
+          MessageFile: true,
+        },
+      });
 
-      return { message: msg };
+      // Update conversation's last updated time
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      return newMessage;
     });
 
-    // Prepare response
-    const participantIds = members
-      .map((m) => m.userId)
+    // Step 8: Prepare response data
+    const allParticipantIds = members
+      .map((member) => member.userId)
       .filter((id): id is number => typeof id === "number");
 
-    const transformedMessage = transformMessage(finalMessage, participantIds);
+    const messageForResponse = transformMessage(createdMessage, allParticipantIds);
     const response = {
       success: true,
       message: "Message sent successfully",
-      data: transformedMessage,
+      data: messageForResponse,
     };
 
-    // Send notifications asynchronously
+    // Step 9: Send notifications in background (don't wait for this)
     setImmediate(async () => {
       try {
-        const pushPromises: Promise<any>[] = [];
+        const pushNotificationPromises: Promise<any>[] = [];
 
-        // Emit read/delivered status if recipients were in room
-        if (hasRecipientsInRoom) {
-          const statusData = {
+        // If message was marked as read, notify everyone about read status
+        if (shouldMarkAsRead) {
+          const readStatusInfo = {
             success: true,
             conversationId,
-            markedBy: userIdInt,
-            messageId: finalMessage.id,
-            recipientsInRoom,
+            markedBy: senderId,
+            messageId: createdMessage.id,
+            markedAsRead: true,
           };
 
+          const deliveredStatusInfo = {
+            success: true,
+            conversationId,
+            markedBy: senderId,
+            messageId: createdMessage.id,
+            isDelivered: true,
+          };
+
+          // Send read/delivered status to all members
           members.forEach((member) => {
             if (member.userId) {
-              request.server.io.to(member.userId.toString()).emit("messages_marked_read", {
-                ...statusData,
-                markedAsRead: true,
-              });
-              request.server.io.to(member.userId.toString()).emit("message_delivered", {
-                ...statusData,
-                isDelivered: true,
-              });
+              const memberIdAsString = member.userId.toString();
+              request.server.io.to(memberIdAsString).emit("messages_marked_read", readStatusInfo);
+              request.server.io.to(memberIdAsString).emit("message_delivered", deliveredStatusInfo);
             }
           });
         }
 
-        // Send new message notifications to all recipients
+        // Send new message notification to all recipients (except sender)
         for (const member of members) {
-          if (member.userId === userIdInt) continue;
+          // Skip sender
+          if (member.userId === senderId) {
+            continue;
+          }
 
-          // Socket event
+          // Send socket event to this recipient
           if (member.userId) {
             request.server.io.to(member.userId.toString()).emit("new_message", response);
           }
 
-          // Push notifications
-          const fcmTokens = member.user?.fcmToken || [];
-          if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
-            const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
-            const pushData = {
+          // Send push notification if user has FCM tokens
+          const userFcmTokens = member.user?.fcmToken || [];
+          if (Array.isArray(userFcmTokens) && userFcmTokens.length > 0) {
+            const validFcmTokens = userFcmTokens.filter((token) => Boolean(token));
+
+            const pushNotificationData = {
               type: "new_message",
               success: "true",
               message: "Message sent successfully",
               data: JSON.stringify({
-                ...transformedMessage,
+                ...messageForResponse,
                 isGroup: conversation.isGroup,
                 isAdmin: member.isAdmin || false,
                 isAllowMemberMessage: conversation.allowMemberMessage,
@@ -247,14 +288,16 @@ export const sendMessage = async (request, reply) => {
               }),
             };
 
-            for (const token of validTokens) {
-              pushPromises.push(
-                request.server.sendDataPush(token, pushData)
+            // Send push to each token
+            for (const token of validFcmTokens) {
+              pushNotificationPromises.push(
+                request.server.sendDataPush(token, pushNotificationData)
                   .then((result) => {
+                    // If token is invalid, remove it from user's tokens
                     if (!result.success && result.shouldRemoveToken && member.userId) {
                       prisma.user.update({
                         where: { id: member.userId },
-                        data: { fcmToken: { set: validTokens.filter((t) => t !== token) } },
+                        data: { fcmToken: { set: validFcmTokens.filter((t) => t !== token) } },
                       }).catch((err) => {
                         request.log.error(`Failed to remove invalid token: ${err.message}`);
                       });
@@ -270,27 +313,30 @@ export const sendMessage = async (request, reply) => {
           }
         }
 
-        if (pushPromises.length > 0) {
-          await Promise.allSettled(pushPromises);
+        // Wait for all push notifications to complete
+        if (pushNotificationPromises.length > 0) {
+          await Promise.allSettled(pushNotificationPromises);
         }
       } catch (error) {
         request.log.error(error, "Error sending notifications");
       }
     });
 
+    // Step 10: Send response to client
     reply.status(201).send(response);
   } catch (error) {
-    // Cleanup uploaded files on error
+    // Cleanup: Delete uploaded files if something went wrong
     try {
-      const files = (request.files as any[]) || [];
-      const filenames = files.map((f) => f.filename).filter(Boolean);
-      if (filenames.length) {
-        FileService.removeFiles(filenames);
+      const uploadedFiles = (request.files as any[]) || [];
+      const fileNames = uploadedFiles.map((f) => f.filename).filter(Boolean);
+      if (fileNames.length > 0) {
+        FileService.removeFiles(fileNames);
       }
     } catch (_) {}
 
     request.log.error(error);
 
+    // Return appropriate error response
     if (error.message === "Conversation not found or you don't have access to it") {
       return reply.status(404).send({
         success: false,

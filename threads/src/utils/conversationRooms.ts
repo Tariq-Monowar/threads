@@ -4,6 +4,7 @@ export const createConversationRoomsStore = () => {
   const conversationRooms: ConversationRoomsMap = new Map();
 
   const joinConversationRoom = (userId: string, conversationId: string) => {
+    console.log("joinConversationRoom.txt", "============joinConversationRoom funcation==============");
     if (!conversationRooms.has(conversationId)) {
       conversationRooms.set(conversationId, new Set());
       console.log(`[Join Room] Created new room for conversation ${conversationId}`);

@@ -105,6 +105,20 @@ export const sendMessage = async (request, reply) => {
 
     const userIdInt = parseInt(userId);
 
+    // OPTIMIZATION: Check which users are in room BEFORE transaction to avoid extra DB query
+    const usersInRoom = request.server.getUsersInConversationRoom
+      ? request.server.getUsersInConversationRoom(conversationId)
+      : [];
+    
+    const usersInRoomNumbers = usersInRoom
+      .map((id) => {
+        const numId = typeof id === "string" ? parseInt(id, 10) : Number(id);
+        return isNaN(numId) ? null : numId;
+      })
+      .filter((id): id is number => id !== null);
+    
+    const usersInRoomSet = new Set(usersInRoomNumbers);
+
     const transactionResult = await prisma.$transaction(async (tx) => {
       const conversation = await tx.conversation.findFirst({
         where: {
@@ -141,15 +155,40 @@ export const sendMessage = async (request, reply) => {
           }))
         : [];
 
-      const [message, members] = await Promise.all([
+      // OPTIMIZATION: Fetch members once and reuse
+      const members = await tx.conversationMember.findMany({
+        where: {
+          conversationId,
+          isDeleted: false,
+        },
+        select: {
+          userId: true,
+          isAdmin: true,
+          user: {
+            select: {
+              id: true,
+              fcmToken: true,
+            },
+          },
+        },
+      });
+
+      // OPTIMIZATION: Check if any recipients are in room to set read/delivered in initial create
+      const recipientsInRoom = members.filter((member) => {
+        return member.userId && member.userId !== userIdInt && usersInRoomSet.has(member.userId);
+      });
+      
+      const shouldMarkAsReadDelivered = recipientsInRoom.length > 0;
+
+      const [message] = await Promise.all([
         tx.message.create({
           data: {
             text: text && text.trim() !== "" ? text : null,
             userId: userIdInt,
             conversationId,
-            // Messages are unread and undelivered by default, will be marked as read/delivered if recipients are in room
-            isRead: false,
-            isDelivered: false,
+            // OPTIMIZATION: Set read/delivered in initial create if recipients are in room (eliminates extra update query)
+            isRead: shouldMarkAsReadDelivered,
+            isDelivered: shouldMarkAsReadDelivered,
             ...(filesCreate.length
               ? {
                   MessageFile: {
@@ -170,22 +209,6 @@ export const sendMessage = async (request, reply) => {
             MessageFile: true,
           },
         }),
-        tx.conversationMember.findMany({
-          where: {
-            conversationId,
-            isDeleted: false,
-          },
-          select: {
-            userId: true,
-            isAdmin: true,
-            user: {
-              select: {
-                id: true,
-                fcmToken: true,
-              },
-            },
-          },
-        }),
         tx.conversation.update({
           where: { id: conversationId },
           data: { updatedAt: new Date() },
@@ -199,134 +222,18 @@ export const sendMessage = async (request, reply) => {
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");
 
-    /*
-    Along with the main data, include the following permission & conversation details in every push message:
-    isGroup
-    isAdmin (for the recipient)
-    isAllowMemberMessage
-    conversationName
-    */
-
-    // Check which users are currently in the conversation room
-    // This is critical for marking messages as read/delivered when users are active in the room
-    const usersInRoom = request.server.getUsersInConversationRoom
-      ? request.server.getUsersInConversationRoom(conversationId)
+    const messageForResponse = transactionResult.message;
+    const wasMarkedAsRead = messageForResponse.isRead && messageForResponse.isDelivered;
+    const recipientsInRoomIds = wasMarkedAsRead
+      ? transactionResult.members
+          .filter((m) => m.userId && m.userId !== userIdInt && usersInRoomSet.has(m.userId))
+          .map((m) => m.userId!)
+          .filter((id): id is number => typeof id === "number")
       : [];
-    
-    // Convert room user IDs to numbers for comparison
-    // getUsersInConversationRoom returns string[], so we need to parse them
-    const usersInRoomNumbers = usersInRoom
-      .map((id) => {
-        const numId = typeof id === "string" ? parseInt(id, 10) : Number(id);
-        return isNaN(numId) ? null : numId;
-      })
-      .filter((id): id is number => id !== null);
-    
-    // Also check which users are online (even if not in room)
-    const onlineUsersMap = request.server.onlineUsers || new Map();
-    const onlineUserIds: number[] = [];
-    for (const [userIdStr, socketSet] of onlineUsersMap.entries()) {
-      const userIdNum = parseInt(userIdStr, 10);
-      if (!isNaN(userIdNum) && socketSet && socketSet.size > 0) {
-        onlineUserIds.push(userIdNum);
-      }
-    }
-    
-    const usersInRoomSet = new Set(usersInRoomNumbers);
-    
-    // Get all member IDs for comparison
-    const allMemberIds = transactionResult.members
-      .map((m) => m.userId)
-      .filter((id): id is number => typeof id === "number");
-    
-    request.log.info(
-      `🔍 Room Check - Conversation: ${conversationId}, Sender: ${userIdInt}, Users in room: [${usersInRoomNumbers.join(", ")}], Online users: [${onlineUserIds.join(", ")}], All members: [${allMemberIds.join(", ")}]`
-    );
-
-    // Filter: Only mark as read/delivered if recipients (NOT sender) are in the room
-    // When multiple people are in the same conversation room, messages should be marked as delivered and read
-    const recipientsInRoom = transactionResult.members.filter((member) => {
-      if (!member.userId || member.userId === userIdInt) {
-        return false;
-      }
-      const isInRoom = usersInRoomSet.has(member.userId);
-      if (isInRoom) {
-        request.log.info(`✅ Recipient ${member.userId} is in room ${conversationId}`);
-      }
-      return isInRoom;
-    });
-
-    let messageForResponse = transactionResult.message;
-    let wasMarkedAsRead = false;
-    let recipientsInRoomIds: number[] = [];
-    
-    // If recipients are in room, mark message as read and delivered immediately (before sending response)
-    // This ensures that when multiple people are in the same conversation room,
-    // isDelivered and isRead are set to true automatically
-    if (recipientsInRoom.length > 0) {
-      recipientsInRoomIds = recipientsInRoom
-        .map((m) => m.userId)
-        .filter((id): id is number => typeof id === "number");
-      
-      request.log.info(
-        `📨 Marking message ${transactionResult.message.id} as read/delivered for ${recipientsInRoomIds.length} recipients in room: [${recipientsInRoomIds.join(", ")}]`
-      );
-      
-      try {
-        // Update message to mark as read and delivered
-        const updateResult = await prisma.message.update({
-          where: { id: transactionResult.message.id },
-          data: { 
-            isRead: true, 
-            isDelivered: true 
-          },
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                avatar: true,
-              },
-            },
-            MessageFile: true,
-          },
-        });
-        
-        // Verify that the update was successful
-        if (updateResult.isRead === true && updateResult.isDelivered === true) {
-          messageForResponse = updateResult;
-          wasMarkedAsRead = true;
-          request.log.info(
-            `✅ SUCCESS: Message ${transactionResult.message.id} marked as read/delivered. isRead=${updateResult.isRead}, isDelivered=${updateResult.isDelivered}`
-          );
-        } else {
-          request.log.error(
-            `❌ FAILED: Message update did not set flags correctly. Expected: isRead=true, isDelivered=true. Got: isRead=${updateResult.isRead}, isDelivered=${updateResult.isDelivered}`
-          );
-          messageForResponse = updateResult; // Still use updated result even if flags are wrong
-        }
-      } catch (error: any) {
-        request.log.error(`❌ ERROR: Failed to mark message as read synchronously: ${error.message}`, error);
-        request.log.error(`Error stack: ${error.stack}`);
-        // Keep original message if update fails
-        messageForResponse = transactionResult.message;
-      }
-    } else {
-      request.log.warn(
-        `⚠️ No recipients in room for message ${transactionResult.message.id}. Users in room: [${usersInRoomNumbers.join(", ")}], All members: [${participantIds.join(", ")}], Sender: ${userIdInt}`
-      );
-      // Message will remain unread/undelivered
-    }
 
     const transformedMessage = transformMessage(
       messageForResponse,
       participantIds
-    );
-
-    // Log final message status for debugging
-    request.log.info(
-      `📤 Final response - Message ID: ${transformedMessage.id}, isRead: ${transformedMessage.isRead}, isDelivered: ${transformedMessage.isDelivered}, wasMarkedAsRead: ${wasMarkedAsRead}, recipientsInRoom: ${recipientsInRoomIds.length > 0 ? `[${recipientsInRoomIds.join(", ")}]` : "none"}`
     );
 
     const response = {
@@ -395,7 +302,6 @@ export const sendMessage = async (request, reply) => {
             }),
           };
 
-          console.log("pushData", pushData);
           // Send socket event (non-blocking)
           if (member.userId) {
             request.server.io
@@ -866,8 +772,6 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       // messageIds: unreadMessages.map((m) => m.id),
       markedAsRead: true,
     };
-
-    console.log("readStatusData", readStatusData);
 
     // Emit to other members only (exclude the user who made the API call)
     members.forEach((member) => {

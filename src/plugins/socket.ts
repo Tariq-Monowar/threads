@@ -241,46 +241,42 @@ export default fp(async (fastify) => {
               return;
             }
 
-            // Check if this is a self-conversation (all messages are from the same user)
-            // Efficient check: see if there are any messages from other users
-            const messagesFromOthers = await (
-              fastify.prisma as any
-            ).message.findFirst({
-              where: {
-                conversationId,
-                NOT: {
-                  userId: userIdInt,
+            // OPTIMIZATION: Single query to check if self-conversation and get members in parallel
+            const [messagesFromOthers, members] = await Promise.all([
+              (fastify.prisma as any).message.findFirst({
+                where: {
+                  conversationId,
+                  NOT: {
+                    userId: userIdInt,
+                  },
                 },
-              },
-              select: {
-                id: true,
-              },
-            });
+                select: {
+                  id: true,
+                },
+              }),
+              fastify.prisma.conversationMember.findMany({
+                where: {
+                  conversationId,
+                  isDeleted: false,
+                },
+                select: {
+                  userId: true,
+                },
+              }),
+            ]);
 
             // If no messages from others, it's a self-conversation
-            // Mark ALL messages (including own) as read and delivered
             if (!messagesFromOthers) {
               // Self-conversation: mark all messages as read/delivered
-              const [updateResult, members] = await Promise.all([
-                (fastify.prisma as any).message.updateMany({
-                  where: {
-                    conversationId,
-                  },
-                  data: {
-                    isRead: true,
-                    isDelivered: true,
-                  },
-                }),
-                fastify.prisma.conversationMember.findMany({
-                  where: {
-                    conversationId,
-                    isDeleted: false,
-                  },
-                  select: {
-                    userId: true,
-                  },
-                }),
-              ]);
+              const updateResult = await (fastify.prisma as any).message.updateMany({
+                where: {
+                  conversationId,
+                },
+                data: {
+                  isRead: true,
+                  isDelivered: true,
+                },
+              });
 
               // Notify user about the update
               if (updateResult.count > 0) {
@@ -295,28 +291,8 @@ export default fp(async (fastify) => {
               return;
             }
 
-            // Normal conversation: mark messages from OTHER members only
-            const unreadMessages = await (
-              fastify.prisma as any
-            ).message.findMany({
-              where: {
-                conversationId,
-                isRead: false,
-                NOT: {
-                  userId: userIdInt,
-                },
-              },
-              select: {
-                id: true,
-              },
-            });
-
-            if (unreadMessages.length === 0) {
-              return; // No unread messages to mark
-            }
-
-            // Update: Only mark messages from other members as read and delivered
-            await (fastify.prisma as any).message.updateMany({
+            // OPTIMIZATION: Check and update in one operation (updateMany returns count, so we know if there were unread messages)
+            const updateResult = await (fastify.prisma as any).message.updateMany({
               where: {
                 conversationId,
                 isRead: false,
@@ -330,16 +306,9 @@ export default fp(async (fastify) => {
               },
             });
 
-            // Get all conversation members to notify them
-            const members = await fastify.prisma.conversationMember.findMany({
-              where: {
-                conversationId,
-                isDeleted: false,
-              },
-              select: {
-                userId: true,
-              },
-            });
+            if (updateResult.count === 0) {
+              return; // No unread messages to mark
+            }
 
             // Emit to other members only (exclude the user who joined)
             const readStatusData = {
@@ -367,7 +336,7 @@ export default fp(async (fastify) => {
     // 5. Leave Conversation Room
     socket.on(
       "leave_conversation",
-      ({
+      async ({
         conversationId,
         userId,
       }: {
@@ -379,6 +348,41 @@ export default fp(async (fastify) => {
         leaveConversationRoom(userId, conversationId);
         socket.leave(`conversation:${conversationId}`);
         socket.emit("conversation_left", { conversationId });
+
+        // FIX: Reset isRead and isDelivered when user leaves conversation
+        // This ensures messages show as unread/undelivered when user returns
+        setImmediate(async () => {
+          try {
+            if (!fastify.prisma) {
+              return;
+            }
+
+            const userIdInt = parseInt(userId);
+            if (Number.isNaN(userIdInt)) {
+              return;
+            }
+
+            // Verify user is no longer in this conversation room (they just left)
+            if (!isUserInConversationRoom(userId, conversationId)) {
+              // Reset read/delivered status for messages from other users in this conversation
+              await (fastify.prisma as any).message.updateMany({
+                where: {
+                  conversationId,
+                  isRead: true,
+                  NOT: {
+                    userId: userIdInt,
+                  },
+                },
+                data: {
+                  isRead: false,
+                  isDelivered: false,
+                },
+              });
+            }
+          } catch (error: any) {
+            // Silent error handling - don't break the leave flow
+          }
+        });
       }
     );
     //-----------------------------------------------------------
@@ -392,6 +396,9 @@ export default fp(async (fastify) => {
     //       'callType': isVideo ? 'video' : 'audio',
     //       "offer": offer.toMap(),
     //     });
+
+
+    
     //==========================================call===========================================
     // 6. Call Initiate (A calls B) offer send
     socket.on(

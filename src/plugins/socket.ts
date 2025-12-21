@@ -77,99 +77,52 @@ export default fp(async (fastify) => {
       io.emit("online-users", getOnlineUserIds());
     });
 
+
     // 2. Typing Indicators (based on conversation rooms)
-    //-----------------------------------------------------------
-    socket.on(
-      "start_typing",
-      ({
-        conversationId,
-        userId,
-        userName,
-      }: {
-        conversationId: string;
-        userId?: string;
-        userName?: string;
-      }) => {
-        if (!conversationId) {
-          return;
-        }
+    const handleTyping = (
+      eventType: "start_typing" | "stop_typing",
+      isTyping: boolean
+    ) => {
+      socket.on(
+        eventType,
+        ({
+          conversationId,
+          userId,
+          userName,
+        }: {
+          conversationId: string;
+          userId?: string;
+          userName?: string;
+        }) => {
+          if (!conversationId) return;
 
-        // Get userId from socket (more secure than trusting client)
-        const actualUserId = userId || getUserId();
-        if (!actualUserId) {
-          return;
-        }
+          const actualUserId = (userId || getUserId())?.toString();
+          if (
+            !actualUserId ||
+            !isUserInConversationRoom(actualUserId, conversationId)
+          )
+            return;
 
-        const userIdStr = actualUserId.toString();
-
-        // Verify user is in the conversation room
-        if (!isUserInConversationRoom(userIdStr, conversationId)) {
           const usersInRoom = getUsersInConversationRoom(conversationId);
-          return;
+          usersInRoom.forEach((memberUserId) => {
+            if (memberUserId !== actualUserId) {
+              io.to(memberUserId).emit(eventType, {
+                conversationId,
+                userId: actualUserId,
+                userName,
+                isTyping,
+              });
+            }
+          });
         }
+      );
+    };
 
-        // Get all users in the conversation room using the conversation room system
-        const usersInRoom = getUsersInConversationRoom(conversationId);
+    handleTyping("start_typing", true);
+    handleTyping("stop_typing", false);
 
-        // Emit to all members in the conversation room (except sender)
-        usersInRoom.forEach((memberUserId) => {
-          if (memberUserId !== userIdStr) {
-            io.to(memberUserId).emit("start_typing", {
-              conversationId,
-              userId: userIdStr,
-              userName,
-              isTyping: true,
-            });
-          }
-        });
-      }
-    );
 
-    socket.on(
-      "stop_typing",
-      ({
-        conversationId,
-        userId,
-        userName,
-      }: {
-        conversationId: string;
-        userId?: string;
-        userName?: string;
-      }) => {
-        if (!conversationId) {
-          return;
-        }
 
-        // Get userId from socket (more secure than trusting client)
-        const actualUserId = userId || getUserId();
-        if (!actualUserId) {
-          return;
-        }
-
-        const userIdStr = actualUserId.toString();
-
-        // Verify user is in the conversation room
-        if (!isUserInConversationRoom(userIdStr, conversationId)) {
-          const usersInRoom = getUsersInConversationRoom(conversationId);
-          return;
-        }
-
-        // Get all users in the conversation room using the conversation room system
-        const usersInRoom = getUsersInConversationRoom(conversationId);
-
-        // Emit to all members in the conversation room (except sender)
-        usersInRoom.forEach((memberUserId) => {
-          if (memberUserId !== userIdStr) {
-            io.to(memberUserId).emit("stop_typing", {
-              conversationId,
-              userId: userIdStr,
-              userName,
-              isTyping: false,
-            });
-          }
-        });
-      }
-    );
     //-----------------------------------------------------------
 
     // 3. Get online users
@@ -178,7 +131,6 @@ export default fp(async (fastify) => {
     });
 
     // 4. Join Conversation Room
-    //-----------------------------------------------------------
     socket.on(
       "join_conversation",
       async ({
@@ -188,71 +140,31 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
-        console.log("join_conversation", "============Heat==============");
-        if (!conversationId || !userId) {
-          return;
-        }
+        if (!conversationId || !userId) return;
 
-        // Check if user is online (has any active sockets)
-        const userSockets = getSocketsForUser(userId);
-
-        // If user is not in onlineUsers, they need to call "join" event first
-        if (!userSockets || userSockets.size === 0) {
-          // Still allow them to join the room (they might be connecting)
-          // But log a warning
-        } else if (!userSockets.has(socket.id)) {
-          // User is online but this specific socket is not registered
-          // This can happen with multiple tabs - we'll still allow the join
-          // Add this socket to user's set
-          userSockets.add(socket.id);
-          socket.join(userId);
-        }
-
-        // Ensure userId is a string for consistency
         const userIdStr = userId.toString();
-
-        // Join the conversation room (always allow, even if socket wasn't registered)
         joinConversationRoom(userIdStr, conversationId);
-        socket.join(`conversation:${conversationId}`);
-
-        // Verify join was successful
-        const usersInRoom = getUsersInConversationRoom(conversationId);
-        const isInRoom = isUserInConversationRoom(userIdStr, conversationId);
 
         socket.emit("conversation_joined", {
           conversationId,
           userId: userIdStr,
         });
 
-        // Mark messages as read when user joins (async, non-blocking)
         setImmediate(async () => {
           try {
-            if (!fastify.prisma) {
-              return;
-            }
-
-            // Double-check user is still connected before marking as read
-            const userSockets = getSocketsForUser(userId);
-            if (!userSockets || !userSockets.has(socket.id)) {
-              return;
-            }
-
             const userIdInt = parseInt(userId);
-            if (Number.isNaN(userIdInt)) {
-              return;
-            }
+            if (Number.isNaN(userIdInt)) return;
 
-            // OPTIMIZATION: Single query to check if self-conversation and get members in parallel
-            const [messagesFromOthers, members] = await Promise.all([
-              (fastify.prisma as any).message.findFirst({
+            const [updateResult, members] = await Promise.all([
+              fastify.prisma.message.updateMany({
                 where: {
                   conversationId,
-                  NOT: {
-                    userId: userIdInt,
-                  },
+                  isRead: false,
+                  NOT: { userId: userIdInt },
                 },
-                select: {
-                  id: true,
+                data: {
+                  isRead: true,
+                  isDelivered: true,
                 },
               }),
               fastify.prisma.conversationMember.findMany({
@@ -260,76 +172,28 @@ export default fp(async (fastify) => {
                   conversationId,
                   isDeleted: false,
                 },
-                select: {
-                  userId: true,
-                },
+                select: { userId: true },
               }),
             ]);
 
-            // If no messages from others, it's a self-conversation
-            if (!messagesFromOthers) {
-              // Self-conversation: mark all messages as read/delivered
-              const updateResult = await (fastify.prisma as any).message.updateMany({
-                where: {
-                  conversationId,
-                },
-                data: {
-                  isRead: true,
-                  isDelivered: true,
-                },
-              });
-
-              // Notify user about the update
-              if (updateResult.count > 0) {
-                socket.emit("messages_marked_read", {
-                  success: true,
-                  conversationId,
-                  markedBy: userIdInt,
-                  markedAsRead: true,
-                  isSelfConversation: true,
-                });
-              }
-              return;
-            }
-
-            // OPTIMIZATION: Check and update in one operation (updateMany returns count, so we know if there were unread messages)
-            const updateResult = await (fastify.prisma as any).message.updateMany({
-              where: {
+            if (updateResult.count > 0) {
+              const readStatusData = {
+                success: true,
                 conversationId,
-                isRead: false,
-                NOT: {
-                  userId: userIdInt,
-                },
-              },
-              data: {
-                isRead: true,
-                isDelivered: true,
-              },
-            });
+                markedBy: userIdInt,
+                markedAsRead: true,
+              };
 
-            if (updateResult.count === 0) {
-              return; // No unread messages to mark
+              members.forEach((member) => {
+                if (member.userId && member.userId !== userIdInt) {
+                  io.to(member.userId.toString()).emit(
+                    "messages_marked_read",
+                    readStatusData
+                  );
+                }
+              });
             }
-
-            // Emit to other members only (exclude the user who joined)
-            const readStatusData = {
-              success: true,
-              conversationId,
-              markedBy: userIdInt,
-              markedAsRead: true,
-            };
-
-            members.forEach((member) => {
-              if (member.userId && member.userId !== userIdInt) {
-                io.to(member.userId.toString()).emit(
-                  "messages_marked_read",
-                  readStatusData
-                );
-              }
-            });
-          } catch (error: any) {
-            // Silent error handling - don't break the join flow
-          }
+          } catch (error: any) {}
         });
       }
     );
@@ -346,66 +210,31 @@ export default fp(async (fastify) => {
       }) => {
         if (!conversationId || !userId) return;
 
-        // Remove user from room FIRST (synchronous)
         leaveConversationRoom(userId, conversationId);
-        socket.leave(`conversation:${conversationId}`);
-        
-        // Verify user is actually removed from room - check multiple times to be sure
-        const isStillInRoom = isUserInConversationRoom(userId, conversationId);
-        const usersInRoomAfterLeave = getUsersInConversationRoom(conversationId);
-        
-        console.log("leave_conversation", {
-          conversationId,
-          userId,
-          isStillInRoom,
-          usersInRoomAfterLeave,
-          shouldReset: !isStillInRoom
-        });
-        
         socket.emit("conversation_left", { conversationId });
 
-        // FIX: Reset isRead and isDelivered when user leaves conversation
-        // This ensures messages show as unread/undelivered when user returns
-        // Run synchronously to prevent race conditions with new messages
-        if (!isStillInRoom && fastify.prisma) {
-          setImmediate(async () => {
-            try {
-              const userIdInt = parseInt(userId);
-              if (Number.isNaN(userIdInt)) {
-                return;
-              }
-
-              // Reset read/delivered status for ALL messages from other users in this conversation
-              // This includes both existing messages and ensures new messages won't be auto-marked
-              const updateResult = await (fastify.prisma as any).message.updateMany({
-                where: {
-                  conversationId,
-                  isRead: true,
-                  NOT: {
-                    userId: userIdInt,
-                  },
-                },
-                data: {
-                  isRead: false,
-                  isDelivered: false,
-                },
-              });
-
-              // Log for debugging
-              if (updateResult.count > 0) {
-                console.log("messages_reset_on_leave", {
-                  conversationId,
-                  userId: userIdInt,
-                  resetCount: updateResult.count,
-                });
-              }
-            } catch (error: any) {
-              // Silent error handling - don't break the leave flow
-            }
-          });
-        }
+        // Reset messages to unread/undelivered when user leaves
+        try {
+          const userIdInt = parseInt(userId);
+          if (!Number.isNaN(userIdInt)) {
+            await fastify.prisma.message.updateMany({
+              where: {
+                conversationId,
+                isRead: true,
+                NOT: { userId: userIdInt },
+              },
+              data: {
+                isRead: false,
+                isDelivered: false,
+              },
+            });
+          }
+        } catch (error: any) {}
       }
     );
+
+    
+
     //-----------------------------------------------------------
     // 'callerId': callerId,
     //       'receiverId': receiverId,
@@ -417,9 +246,6 @@ export default fp(async (fastify) => {
     //       'callType': isVideo ? 'video' : 'audio',
     //       "offer": offer.toMap(),
     //     });
-
-
-    
     //==========================================call===========================================
     // 6. Call Initiate (A calls B) offer send
     socket.on(
@@ -1046,8 +872,10 @@ export default fp(async (fastify) => {
         const receiverSockets = getSocketsForUser(receiverId);
         if (!receiverSockets || receiverSockets.size === 0) return;
 
+        // 🔥 SOFT RESET (same as call_end but without deleting call)
         clearIceCandidateBuffer(senderId, receiverId);
 
+        // Reset state to calling (important)
         activeCalls.set(senderId, {
           ...existingCall,
           status: "calling",

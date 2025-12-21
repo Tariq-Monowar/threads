@@ -140,8 +140,13 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
-        if (!conversationId || !userId) return;
-
+        if (!conversationId || !userId) {
+          console.log("join_conversation", "conversationId or userId is missing");
+          return;
+        }
+        console.log("join_conversation", "============Heat==============");
+        console.log("conversationId", conversationId);
+        console.log("userId", userId);
         const userIdStr = userId.toString();
         joinConversationRoom(userIdStr, conversationId);
 
@@ -208,16 +213,20 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
-        if (!conversationId || !userId) return;
+        if (!conversationId || !userId){
+          console.log("conversation_left", "conversationId or userId is missing");
+          return;
+        } 
+        console.log("conversation_left", "============Heat==============");
+        console.log("conversationId", conversationId);
+        console.log("userId", userId);
 
         leaveConversationRoom(userId, conversationId);
-        socket.emit("conversation_left", { conversationId });
-
-        // Reset messages to unread/undelivered when user leaves
+        socket.emit("conversation_left", { conversationId, userId });
         try {
           const userIdInt = parseInt(userId);
           if (!Number.isNaN(userIdInt)) {
-            await fastify.prisma.message.updateMany({
+            const updateResult = await fastify.prisma.message.updateMany({
               where: {
                 conversationId,
                 isRead: true,

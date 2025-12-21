@@ -1,0 +1,39 @@
+# docker-compose.dev.yml
+version: '4'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: miguel_trevino_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: miguel_trevino_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - miguel_trevino_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: miguel_trevino_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - miguel_trevino_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  miguel_trevino_network:
+    driver: bridge

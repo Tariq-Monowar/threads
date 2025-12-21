@@ -15,6 +15,7 @@ export const createConversationRoomsStore = () => {
   };
 
   const leaveConversationRoom = (userId: string, conversationId: string): boolean => {
+    console.log("leaveConversationRoom.txt", "============leaveConversationRoom funcation==============");
     const room = conversationRooms.get(conversationId);
     if (room) {
       const wasInRoom = room.has(userId);

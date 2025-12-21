@@ -173,9 +173,22 @@ export const sendMessage = async (request, reply) => {
         },
       });
 
+      // CRITICAL: Re-check room status RIGHT BEFORE creating message to avoid race conditions
+      // This ensures if a user left between the initial check and message creation, they won't be marked as read
+      const currentUsersInRoom = request.server.getUsersInConversationRoom
+        ? request.server.getUsersInConversationRoom(conversationId)
+        : [];
+      const currentUsersInRoomNumbers = currentUsersInRoom
+        .map((id) => {
+          const numId = typeof id === "string" ? parseInt(id, 10) : Number(id);
+          return isNaN(numId) ? null : numId;
+        })
+        .filter((id): id is number => id !== null);
+      const currentUsersInRoomSet = new Set(currentUsersInRoomNumbers);
+
       // OPTIMIZATION: Check if any recipients are in room to set read/delivered in initial create
       const recipientsInRoom = members.filter((member) => {
-        return member.userId && member.userId !== userIdInt && usersInRoomSet.has(member.userId);
+        return member.userId && member.userId !== userIdInt && currentUsersInRoomSet.has(member.userId);
       });
       
       const shouldMarkAsReadDelivered = recipientsInRoom.length > 0;

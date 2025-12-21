@@ -188,6 +188,7 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
+        console.log("join_conversation", "============Heat==============");
         if (!conversationId || !userId) {
           return;
         }
@@ -222,11 +223,10 @@ export default fp(async (fastify) => {
           conversationId,
           userId: userIdStr,
         });
-        console.log("conversation_joined", "============Heat==============");
+
         // Mark messages as read when user joins (async, non-blocking)
         setImmediate(async () => {
           try {
-            console.log("mark_messages_as_read", "============Heat==============");
             if (!fastify.prisma) {
               return;
             }
@@ -346,30 +346,30 @@ export default fp(async (fastify) => {
       }) => {
         console.log("leave_conversation", "============Heat==============");
         if (!conversationId || !userId) return;
-        console.log("leave_conversation", conversationId, userId);
-      
 
+        // Remove user from room FIRST (synchronous)
         leaveConversationRoom(userId, conversationId);
         socket.leave(`conversation:${conversationId}`);
+        
+        // Verify user is actually removed from room
+        const isStillInRoom = isUserInConversationRoom(userId, conversationId);
+        
         socket.emit("conversation_left", { conversationId });
 
         // FIX: Reset isRead and isDelivered when user leaves conversation
         // This ensures messages show as unread/undelivered when user returns
-        setImmediate(async () => {
-          try {
-            if (!fastify.prisma) {
-              return;
-            }
+        // Run synchronously to prevent race conditions with new messages
+        if (!isStillInRoom && fastify.prisma) {
+          setImmediate(async () => {
+            try {
+              const userIdInt = parseInt(userId);
+              if (Number.isNaN(userIdInt)) {
+                return;
+              }
 
-            const userIdInt = parseInt(userId);
-            if (Number.isNaN(userIdInt)) {
-              return;
-            }
-
-            // Verify user is no longer in this conversation room (they just left)
-            if (!isUserInConversationRoom(userId, conversationId)) {
-              // Reset read/delivered status for messages from other users in this conversation
-              await (fastify.prisma as any).message.updateMany({
+              // Reset read/delivered status for ALL messages from other users in this conversation
+              // This includes both existing messages and ensures new messages won't be auto-marked
+              const updateResult = await (fastify.prisma as any).message.updateMany({
                 where: {
                   conversationId,
                   isRead: true,
@@ -382,17 +382,20 @@ export default fp(async (fastify) => {
                   isDelivered: false,
                 },
               });
+
+              // Log for debugging
+              if (updateResult.count > 0) {
+                console.log("messages_reset_on_leave", {
+                  conversationId,
+                  userId: userIdInt,
+                  resetCount: updateResult.count,
+                });
+              }
+            } catch (error: any) {
+              // Silent error handling - don't break the leave flow
             }
-            console.log("messages_marked_read", {
-              conversationId,
-              userId: userIdInt,
-              isRead: false,
-              isDelivered: false,
-            });
-          } catch (error: any) {
-            // Silent error handling - don't break the leave flow
-          }
-        });
+          });
+        }
       }
     );
     //-----------------------------------------------------------

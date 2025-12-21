@@ -268,18 +268,41 @@ export const sendMessage = async (request, reply) => {
         .map((m) => m.userId)
         .filter((id): id is number => typeof id === "number");
       
-      request.log.info(
-        `📨 Marking message ${transactionResult.message.id} as read/delivered for ${recipientsInRoomIds.length} recipients in room: [${recipientsInRoomIds.join(", ")}]`
-      );
+      // 🔥 CRITICAL: Double-check RIGHT BEFORE marking as read/delivered
+      // This prevents race condition where user leaves between initial check and DB update
+      const finalVerification = recipientsInRoomIds.filter((recipientId) => {
+        if (!request.server.isUserInConversationRoom) {
+          return false;
+        }
+        const stillInRoom = request.server.isUserInConversationRoom(
+          recipientId.toString(),
+          conversationId
+        );
+        if (!stillInRoom) {
+          request.log.warn(
+            `⚠️ Recipient ${recipientId} left room ${conversationId} before message was marked as read - excluding from read/delivered status`
+          );
+        }
+        return stillInRoom;
+      });
       
-      try {
-        // Update message to mark as read and delivered
-        const updateResult = await prisma.message.update({
-          where: { id: transactionResult.message.id },
-          data: { 
-            isRead: true, 
-            isDelivered: true 
-          },
+      // Only mark as read/delivered if recipients are STILL in room after final verification
+      if (finalVerification.length > 0) {
+        // Update recipientsInRoomIds to only include those still in room after verification
+        recipientsInRoomIds = finalVerification;
+        
+        request.log.info(
+          `📨 Marking message ${transactionResult.message.id} as read/delivered for ${finalVerification.length} recipients still in room: [${finalVerification.join(", ")}] (originally ${recipientsInRoom.length} were in room)`
+        );
+        
+        try {
+          // Update message to mark as read and delivered
+          const updateResult = await prisma.message.update({
+            where: { id: transactionResult.message.id },
+            data: { 
+              isRead: true, 
+              isDelivered: true 
+            },
           include: {
             user: {
               select: {
@@ -311,6 +334,13 @@ export const sendMessage = async (request, reply) => {
         request.log.error(`Error stack: ${error.stack}`);
         // Keep original message if update fails
         messageForResponse = transactionResult.message;
+      }
+      } else {
+        // All recipients left the room before we could mark as read
+        request.log.warn(
+          `⚠️ All recipients left room ${conversationId} before message ${transactionResult.message.id} could be marked as read. Message will remain unread/undelivered.`
+        );
+        // Message will remain unread/undelivered
       }
     } else {
       request.log.warn(

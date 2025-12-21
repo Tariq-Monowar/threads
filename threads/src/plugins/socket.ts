@@ -38,6 +38,7 @@ export default fp(async (fastify) => {
     leaveConversationRoom,
     isUserInConversationRoom,
     getUsersInConversationRoom,
+    debugGetAllRooms,
   } = createConversationRoomsStore();
 
   const {
@@ -130,6 +131,19 @@ export default fp(async (fastify) => {
       socket.emit("online-users", getOnlineUserIds());
     });
 
+    // Debug: Get conversation room state
+    socket.on("debug_get_room_state", ({ conversationId }: { conversationId: string }) => {
+      const users = getUsersInConversationRoom(conversationId);
+      const allRooms = debugGetAllRooms();
+      socket.emit("debug_room_state", {
+        conversationId,
+        usersInRoom: users,
+        allRooms,
+      });
+      process.stdout.write(`[DEBUG] Room state requested for ${conversationId}: [${users.join(", ")}]\n`);
+      process.stdout.write(`[DEBUG] All rooms: ${JSON.stringify(allRooms)}\n`);
+    });
+
     // 4. Join Conversation Room
     socket.on(
       "join_conversation",
@@ -149,9 +163,17 @@ export default fp(async (fastify) => {
         console.log("userId", userId);
         const userIdStr = userId.toString();
         
-        console.log("📞 [SOCKET] About to call joinConversationRoom...");
+        // Get room state BEFORE joining
+        const roomStateBeforeJoin = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET JOIN] BEFORE: Room users: [${roomStateBeforeJoin.join(", ")}]\n`);
+        
+        process.stdout.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
         joinConversationRoom(userIdStr, conversationId);
-        console.log("📞 [SOCKET] joinConversationRoom call completed");
+        
+        // Get room state AFTER joining
+        const roomStateAfterJoin = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}]\n`);
+        process.stdout.write(`[SOCKET JOIN] User ${userIdStr} should now be in room: ${roomStateAfterJoin.includes(userIdStr)}\n\n`);
 
         socket.emit("conversation_joined", {
           conversationId,
@@ -231,10 +253,14 @@ export default fp(async (fastify) => {
         const wasInRoomBefore = isUserInConversationRoom(userIdStr, conversationId);
         console.log(`[Leave Room] User ${userIdStr} was in room ${conversationId} before leave: ${wasInRoomBefore}`);
         
+        // Get room state BEFORE leaving
+        const roomStateBefore = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET LEAVE] BEFORE: Room users: [${roomStateBefore.join(", ")}]\n`);
+        
         // Remove user from conversation room
-        console.log("📞 [SOCKET] About to call leaveConversationRoom...");
+        process.stdout.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
         const wasRemoved = leaveConversationRoom(userIdStr, conversationId);
-        console.log("📞 [SOCKET] leaveConversationRoom call completed, result:", wasRemoved);
+        process.stdout.write(`[SOCKET LEAVE] leaveConversationRoom returned: ${wasRemoved}\n`);
         
         // Verify user was removed (for debugging) - check multiple times to ensure consistency
         const stillInRoom1 = isUserInConversationRoom(userIdStr, conversationId);
@@ -243,6 +269,9 @@ export default fp(async (fastify) => {
         // Get current room state for verification
         const currentRoomUsers = getUsersInConversationRoom(conversationId);
         const isInRoomList = currentRoomUsers.includes(userIdStr);
+        
+        process.stdout.write(`[SOCKET LEAVE] AFTER: Room users: [${currentRoomUsers.join(", ")}]\n`);
+        process.stdout.write(`[SOCKET LEAVE] Verification: stillInRoom1=${stillInRoom1}, stillInRoom2=${stillInRoom2}, isInRoomList=${isInRoomList}\n`);
         
         if (wasRemoved && !stillInRoom1 && !stillInRoom2 && !isInRoomList) {
           console.log(`[Leave Room] ✅ SUCCESS: User ${userIdStr} successfully removed from room ${conversationId}`);
@@ -1009,12 +1038,21 @@ export default fp(async (fastify) => {
 
       // Only remove user from conversation rooms if this was their last socket
       if (remainingCount === 0) {
+        process.stdout.write(`[DISCONNECT] User ${userId} disconnected - last socket, removing from all rooms\n`);
         // Remove user from all conversation rooms
+        const roomsToLeave: string[] = [];
         for (const [conversationId, room] of conversationRooms.entries()) {
           if (room.has(userId)) {
-            leaveConversationRoom(userId, conversationId);
+            roomsToLeave.push(conversationId);
           }
         }
+        process.stdout.write(`[DISCONNECT] User ${userId} was in ${roomsToLeave.length} rooms: [${roomsToLeave.join(", ")}]\n`);
+        roomsToLeave.forEach((conversationId) => {
+          leaveConversationRoom(userId, conversationId);
+        });
+        process.stdout.write(`[DISCONNECT] User ${userId} removed from all rooms\n\n`);
+      } else {
+        process.stdout.write(`[DISCONNECT] User ${userId} disconnected but has ${remainingCount} other sockets - NOT removing from rooms\n`);
       }
 
       if (activeCalls.has(userId)) {

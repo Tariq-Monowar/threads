@@ -344,15 +344,23 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
-        console.log("leave_conversation", "============Heat==============");
         if (!conversationId || !userId) return;
 
         // Remove user from room FIRST (synchronous)
         leaveConversationRoom(userId, conversationId);
         socket.leave(`conversation:${conversationId}`);
         
-        // Verify user is actually removed from room
+        // Verify user is actually removed from room - check multiple times to be sure
         const isStillInRoom = isUserInConversationRoom(userId, conversationId);
+        const usersInRoomAfterLeave = getUsersInConversationRoom(conversationId);
+        
+        console.log("leave_conversation", {
+          conversationId,
+          userId,
+          isStillInRoom,
+          usersInRoomAfterLeave,
+          shouldReset: !isStillInRoom
+        });
         
         socket.emit("conversation_left", { conversationId });
 

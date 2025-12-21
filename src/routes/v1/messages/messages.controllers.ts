@@ -186,12 +186,58 @@ export const sendMessage = async (request, reply) => {
         .filter((id): id is number => id !== null);
       const currentUsersInRoomSet = new Set(currentUsersInRoomNumbers);
 
-      // OPTIMIZATION: Check if any recipients are in room to set read/delivered in initial create
-      const recipientsInRoom = members.filter((member) => {
-        return member.userId && member.userId !== userIdInt && currentUsersInRoomSet.has(member.userId);
+      // CRITICAL: Only mark as read/delivered if ALL RECEIVERS (other members) are actually in the room
+      // If ANY recipient is NOT in the room, the message should be unread/undelivered
+      const allRecipients = members.filter((member) => {
+        return member.userId && member.userId !== userIdInt;
       });
       
-      const shouldMarkAsReadDelivered = recipientsInRoom.length > 0;
+      // Check each recipient individually - ALL must be in room for message to be marked as read
+      const recipientsInRoom = allRecipients.filter((member) => {
+        if (!member.userId) return false;
+        
+        // First check: is user in the room set?
+        const isInRoomSet = currentUsersInRoomSet.has(member.userId);
+        if (!isInRoomSet) {
+          return false; // Not in room set, definitely not in room
+        }
+        
+        // Second check: verify via the socket function to be absolutely sure
+        const isActuallyInRoom = request.server.isUserInConversationRoom
+          ? request.server.isUserInConversationRoom(member.userId.toString(), conversationId)
+          : false;
+        
+        return isActuallyInRoom;
+      });
+      
+      // Only mark as read/delivered if ALL recipients are in the room
+      // If even one recipient is not in room, message should be unread
+      const shouldMarkAsReadDelivered = allRecipients.length > 0 && recipientsInRoom.length === allRecipients.length;
+      
+      // Log for debugging - CRITICAL to understand why messages are marked as read
+      console.log("🔍 MESSAGE_ROOM_CHECK", {
+        conversationId,
+        senderId: userIdInt,
+        allRecipients: allRecipients.map(m => m.userId),
+        recipientsInRoom: recipientsInRoom.map(m => m.userId),
+        totalRecipients: allRecipients.length,
+        recipientsInRoomCount: recipientsInRoom.length,
+        usersInRoomFromSet: Array.from(currentUsersInRoomSet),
+        shouldMarkAsReadDelivered,
+        reason: allRecipients.length === 0 
+          ? "no_recipients" 
+          : recipientsInRoom.length === allRecipients.length 
+            ? "all_recipients_in_room" 
+            : "some_recipients_not_in_room",
+        recipientDetails: allRecipients.map(m => ({
+          userId: m.userId,
+          inSet: currentUsersInRoomSet.has(m.userId!),
+          inRoomFunction: request.server.isUserInConversationRoom
+            ? request.server.isUserInConversationRoom(m.userId!.toString(), conversationId)
+            : false,
+          isInRoom: recipientsInRoom.some(r => r.userId === m.userId)
+        }))
+      });
 
       const [message] = await Promise.all([
         tx.message.create({

@@ -222,10 +222,11 @@ export default fp(async (fastify) => {
           conversationId,
           userId: userIdStr,
         });
-
+        console.log("conversation_joined", "============Heat==============");
         // Mark messages as read when user joins (async, non-blocking)
         setImmediate(async () => {
           try {
+            console.log("mark_messages_as_read", "============Heat==============");
             if (!fastify.prisma) {
               return;
             }
@@ -343,7 +344,10 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
+        console.log("leave_conversation", "============Heat==============");
         if (!conversationId || !userId) return;
+        console.log("leave_conversation", conversationId, userId);
+      
 
         leaveConversationRoom(userId, conversationId);
         socket.leave(`conversation:${conversationId}`);
@@ -379,6 +383,12 @@ export default fp(async (fastify) => {
                 },
               });
             }
+            console.log("messages_marked_read", {
+              conversationId,
+              userId: userIdInt,
+              isRead: false,
+              isDelivered: false,
+            });
           } catch (error: any) {
             // Silent error handling - don't break the leave flow
           }

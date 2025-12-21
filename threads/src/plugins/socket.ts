@@ -167,12 +167,29 @@ export default fp(async (fastify) => {
         const roomStateBeforeJoin = getUsersInConversationRoom(conversationId);
         process.stdout.write(`[SOCKET JOIN] BEFORE: Room users: [${roomStateBeforeJoin.join(", ")}]\n`);
         
-        process.stdout.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
-        joinConversationRoom(userIdStr, conversationId);
+        // Verify function exists before calling
+        if (typeof joinConversationRoom !== 'function') {
+          console.error(`❌ [SOCKET JOIN] ERROR: joinConversationRoom is not a function! Type: ${typeof joinConversationRoom}`);
+          process.stderr.write(`❌ [SOCKET JOIN] ERROR: joinConversationRoom is not a function!\n`);
+        } else {
+          console.error(`✅ [SOCKET JOIN] joinConversationRoom is a function, calling now...`);
+          process.stdout.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
+          process.stderr.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
+          
+          try {
+            joinConversationRoom(userIdStr, conversationId);
+            console.error(`✅ [SOCKET JOIN] joinConversationRoom call completed`);
+          } catch (error: any) {
+            console.error(`❌ [SOCKET JOIN] ERROR calling joinConversationRoom:`, error);
+            process.stderr.write(`❌ [SOCKET JOIN] ERROR: ${error?.message || error}\n`);
+          }
+        }
         
         // Get room state AFTER joining
         const roomStateAfterJoin = getUsersInConversationRoom(conversationId);
         process.stdout.write(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}]\n`);
+        process.stderr.write(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}]\n`);
+        console.error(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}], User ${userIdStr} in room: ${roomStateAfterJoin.includes(userIdStr)}`);
         process.stdout.write(`[SOCKET JOIN] User ${userIdStr} should now be in room: ${roomStateAfterJoin.includes(userIdStr)}\n\n`);
 
         socket.emit("conversation_joined", {
@@ -258,9 +275,25 @@ export default fp(async (fastify) => {
         process.stdout.write(`[SOCKET LEAVE] BEFORE: Room users: [${roomStateBefore.join(", ")}]\n`);
         
         // Remove user from conversation room
-        process.stdout.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
-        const wasRemoved = leaveConversationRoom(userIdStr, conversationId);
-        process.stdout.write(`[SOCKET LEAVE] leaveConversationRoom returned: ${wasRemoved}\n`);
+        let wasRemoved = false;
+        // Verify function exists before calling
+        if (typeof leaveConversationRoom !== 'function') {
+          console.error(`❌ [SOCKET LEAVE] ERROR: leaveConversationRoom is not a function! Type: ${typeof leaveConversationRoom}`);
+          process.stderr.write(`❌ [SOCKET LEAVE] ERROR: leaveConversationRoom is not a function!\n`);
+        } else {
+          console.error(`✅ [SOCKET LEAVE] leaveConversationRoom is a function, calling now...`);
+          process.stdout.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
+          process.stderr.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
+          
+          try {
+            wasRemoved = leaveConversationRoom(userIdStr, conversationId);
+            console.error(`✅ [SOCKET LEAVE] leaveConversationRoom call completed, returned: ${wasRemoved}`);
+          } catch (error: any) {
+            console.error(`❌ [SOCKET LEAVE] ERROR calling leaveConversationRoom:`, error);
+            process.stderr.write(`❌ [SOCKET LEAVE] ERROR: ${error?.message || error}\n`);
+          }
+          process.stdout.write(`[SOCKET LEAVE] leaveConversationRoom returned: ${wasRemoved}\n`);
+        }
         
         // Verify user was removed (for debugging) - check multiple times to ensure consistency
         const stillInRoom1 = isUserInConversationRoom(userIdStr, conversationId);

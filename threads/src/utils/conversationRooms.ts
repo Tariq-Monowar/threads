@@ -5,81 +5,100 @@ export const createConversationRoomsStore = () => {
   const conversationRooms: ConversationRoomsMap = new Map();
 
   const joinConversationRoom = (userId: string, conversationId: string) => {
-    // Use process.stdout.write for more reliable output
-    process.stdout.write(`\n🔵 [JOIN ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
-    console.log("🔵 [JOIN ROOM FUNCTION CALLED]", { userId, conversationId });
-    
-    if (!conversationRooms.has(conversationId)) {
-      conversationRooms.set(conversationId, new Set());
-      process.stdout.write(`[Join Room] ✅ Created new room for conversation ${conversationId}\n`);
+    try {
+      // Force immediate output with multiple methods
+      console.error(`\n🔵🔵🔵 [JOIN ROOM FUNCTION CALLED] 🔵🔵🔵`);
+      console.error(`User ID: ${userId}, Conversation ID: ${conversationId}`);
+      process.stdout.write(`\n🔵 [JOIN ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
+      process.stderr.write(`[JOIN ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
+      
+      if (!conversationRooms.has(conversationId)) {
+        conversationRooms.set(conversationId, new Set());
+        console.error(`[Join Room] ✅ Created new room for conversation ${conversationId}`);
+        process.stdout.write(`[Join Room] ✅ Created new room for conversation ${conversationId}\n`);
+      }
+      const room = conversationRooms.get(conversationId)!;
+      const wasAlreadyInRoom = room.has(userId);
+      room.add(userId);
+      
+      const usersInRoom = Array.from(room);
+      console.error(`[Join Room] User ${userId} ${wasAlreadyInRoom ? 'already in' : 'joined'} conversation ${conversationId}`);
+      console.error(`[Join Room] Total users: ${room.size}, Users: [${usersInRoom.join(", ")}]`);
+      process.stdout.write(`[Join Room] User ${userId} ${wasAlreadyInRoom ? 'already in' : 'joined'} conversation ${conversationId}\n`);
+      process.stdout.write(`[Join Room] Total users: ${room.size}, Users: [${usersInRoom.join(", ")}]\n\n`);
+      
+      // Verify it worked
+      const verifyRoom = conversationRooms.get(conversationId);
+      const verifyHasUser = verifyRoom?.has(userId);
+      console.error(`[Join Room] VERIFICATION: Room exists=${!!verifyRoom}, User in room=${verifyHasUser}, Room size=${verifyRoom?.size}`);
+    } catch (error: any) {
+      console.error(`[Join Room] ❌ ERROR:`, error);
+      process.stderr.write(`[Join Room] ERROR: ${error?.message || error}\n`);
+      throw error;
     }
-    const room = conversationRooms.get(conversationId)!;
-    const wasAlreadyInRoom = room.has(userId);
-    room.add(userId);
-    
-    const usersInRoom = Array.from(room);
-    process.stdout.write(`[Join Room] User ${userId} ${wasAlreadyInRoom ? 'already in' : 'joined'} conversation ${conversationId}\n`);
-    process.stdout.write(`[Join Room] Total users: ${room.size}, Users: [${usersInRoom.join(", ")}]\n\n`);
-    console.log(`[Join Room] State:`, { 
-      conversationId, 
-      userId, 
-      wasAlreadyInRoom, 
-      roomSize: room.size, 
-      usersInRoom 
-    });
   };
 
   const leaveConversationRoom = (userId: string, conversationId: string): boolean => {
-    // Use process.stdout.write for more reliable output
-    process.stdout.write(`\n🔴 [LEAVE ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
-    console.log("🔴 [LEAVE ROOM FUNCTION CALLED]", { userId, conversationId });
-    
-    const room = conversationRooms.get(conversationId);
-    if (room) {
-      const wasInRoom = room.has(userId);
-      const roomSizeBefore = room.size;
-      const usersBefore = Array.from(room);
+    try {
+      // Force immediate output with multiple methods
+      console.error(`\n🔴🔴🔴 [LEAVE ROOM FUNCTION CALLED] 🔴🔴🔴`);
+      console.error(`User ID: ${userId}, Conversation ID: ${conversationId}`);
+      process.stdout.write(`\n🔴 [LEAVE ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
+      process.stderr.write(`[LEAVE ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
       
-      process.stdout.write(`[Leave Room] Room exists: ✅, User was in room: ${wasInRoom ? 'YES' : 'NO'}, Size before: ${roomSizeBefore}\n`);
-      
-      if (wasInRoom) {
-        room.delete(userId);
-        const roomSizeAfter = room.size;
-        const usersAfter = Array.from(room);
+      const room = conversationRooms.get(conversationId);
+      if (room) {
+        const wasInRoom = room.has(userId);
+        const roomSizeBefore = room.size;
+        const usersBefore = Array.from(room);
         
-        process.stdout.write(`[Leave Room] ✅ User ${userId} REMOVED from conversation ${conversationId}\n`);
-        process.stdout.write(`[Leave Room] Room size: ${roomSizeBefore} → ${roomSizeAfter}\n`);
+        console.error(`[Leave Room] Room exists: ✅, User was in room: ${wasInRoom ? 'YES' : 'NO'}, Size before: ${roomSizeBefore}`);
+        process.stdout.write(`[Leave Room] Room exists: ✅, User was in room: ${wasInRoom ? 'YES' : 'NO'}, Size before: ${roomSizeBefore}\n`);
         
-        if (room.size === 0) {
-          conversationRooms.delete(conversationId);
-          process.stdout.write(`[Leave Room] 🗑️ Room ${conversationId} DELETED (empty)\n\n`);
+        if (wasInRoom) {
+          room.delete(userId);
+          const roomSizeAfter = room.size;
+          const usersAfter = Array.from(room);
+          
+          console.error(`[Leave Room] ✅ User ${userId} REMOVED from conversation ${conversationId}`);
+          console.error(`[Leave Room] Room size: ${roomSizeBefore} → ${roomSizeAfter}`);
+          process.stdout.write(`[Leave Room] ✅ User ${userId} REMOVED from conversation ${conversationId}\n`);
+          process.stdout.write(`[Leave Room] Room size: ${roomSizeBefore} → ${roomSizeAfter}\n`);
+          
+          if (room.size === 0) {
+            conversationRooms.delete(conversationId);
+            console.error(`[Leave Room] 🗑️ Room ${conversationId} DELETED (empty)`);
+            process.stdout.write(`[Leave Room] 🗑️ Room ${conversationId} DELETED (empty)\n\n`);
+          } else {
+            console.error(`[Leave Room] Remaining users: [${usersAfter.join(", ")}]`);
+            process.stdout.write(`[Leave Room] Remaining users: [${usersAfter.join(", ")}]\n\n`);
+          }
+          
+          // Verify it worked
+          const verifyRoom = conversationRooms.get(conversationId);
+          const verifyHasUser = verifyRoom?.has(userId);
+          console.error(`[Leave Room] VERIFICATION: Room exists=${!!verifyRoom}, User in room=${verifyHasUser}, Room size=${verifyRoom?.size || 0}`);
+          
+          return true;
         } else {
-          process.stdout.write(`[Leave Room] Remaining users: [${usersAfter.join(", ")}]\n\n`);
+          console.error(`[Leave Room] ⚠️ User ${userId} was NOT in room ${conversationId}`);
+          console.error(`[Leave Room] Current users: [${usersBefore.join(", ")}]`);
+          process.stdout.write(`[Leave Room] ⚠️ User ${userId} was NOT in room ${conversationId}\n`);
+          process.stdout.write(`[Leave Room] Current users: [${usersBefore.join(", ")}]\n\n`);
+          return false;
         }
-        
-        console.log(`[Leave Room] Success:`, { 
-          userId, 
-          conversationId, 
-          wasInRoom, 
-          roomSizeBefore, 
-          roomSizeAfter,
-          usersBefore,
-          usersAfter,
-          roomDeleted: room.size === 0
-        });
-        return true;
       } else {
-        process.stdout.write(`[Leave Room] ⚠️ User ${userId} was NOT in room ${conversationId}\n`);
-        process.stdout.write(`[Leave Room] Current users: [${usersBefore.join(", ")}]\n\n`);
-        console.log(`[Leave Room] User not in room:`, { userId, conversationId, usersBefore });
+        const availableRooms = Array.from(conversationRooms.keys());
+        console.error(`[Leave Room] ❌ Room ${conversationId} does NOT exist`);
+        console.error(`[Leave Room] Available rooms: [${availableRooms.join(", ")}]`);
+        process.stdout.write(`[Leave Room] ❌ Room ${conversationId} does NOT exist\n`);
+        process.stdout.write(`[Leave Room] Available rooms: [${availableRooms.join(", ")}]\n\n`);
         return false;
       }
-    } else {
-      const availableRooms = Array.from(conversationRooms.keys());
-      process.stdout.write(`[Leave Room] ❌ Room ${conversationId} does NOT exist\n`);
-      process.stdout.write(`[Leave Room] Available rooms: [${availableRooms.join(", ")}]\n\n`);
-      console.log(`[Leave Room] Room not found:`, { conversationId, availableRooms });
-      return false;
+    } catch (error: any) {
+      console.error(`[Leave Room] ❌ ERROR:`, error);
+      process.stderr.write(`[Leave Room] ERROR: ${error?.message || error}\n`);
+      throw error;
     }
   };
 
@@ -95,16 +114,21 @@ export const createConversationRoomsStore = () => {
   };
 
   const getUsersInConversationRoom = (conversationId: string): string[] => {
-    const room = conversationRooms.get(conversationId);
-    const users = room ? Array.from(room) : [];
-    
-    // Only log if there are users to avoid spam
-    if (users.length > 0) {
-      process.stdout.write(`🟡 [GET ROOM] Conversation: ${conversationId}, Users: [${users.join(", ")}], Size: ${room?.size || 0}\n`);
+    try {
+      const room = conversationRooms.get(conversationId);
+      const users = room ? Array.from(room) : [];
+      
+      // Log every call for debugging
+      console.error(`🟡 [GET ROOM] Conversation: ${conversationId}, Room exists: ${!!room}, Size: ${room?.size || 0}, Users: [${users.join(", ")}]`);
+      if (users.length > 0) {
+        process.stdout.write(`🟡 [GET ROOM] Conversation: ${conversationId}, Users: [${users.join(", ")}], Size: ${room?.size || 0}\n`);
+      }
+      
+      return users;
+    } catch (error: any) {
+      console.error(`[Get Room] ❌ ERROR:`, error);
+      return [];
     }
-    console.log("🟡 [GET USERS IN ROOM]", { conversationId, roomExists: !!room, roomSize: room?.size || 0, users });
-    
-    return users;
   };
   
   // Debug function to get all rooms state

@@ -177,7 +177,7 @@ export default fp(async (fastify) => {
           process.stderr.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
           
           try {
-            joinConversationRoom(userIdStr, conversationId);
+        joinConversationRoom(userIdStr, conversationId);
             console.error(`✅ [SOCKET JOIN] joinConversationRoom call completed`);
           } catch (error: any) {
             console.error(`❌ [SOCKET JOIN] ERROR calling joinConversationRoom:`, error);
@@ -262,7 +262,7 @@ export default fp(async (fastify) => {
         console.log("conversation_left", "============Heat==============");
         console.log("conversationId", conversationId);
         console.log("userId", userId);
-        
+
         // Convert userId to string for consistency (same as join_conversation)
         const userIdStr = userId.toString();
         
@@ -1081,7 +1081,7 @@ export default fp(async (fastify) => {
         }
         process.stdout.write(`[DISCONNECT] User ${userId} was in ${roomsToLeave.length} rooms: [${roomsToLeave.join(", ")}]\n`);
         roomsToLeave.forEach((conversationId) => {
-          leaveConversationRoom(userId, conversationId);
+            leaveConversationRoom(userId, conversationId);
         });
         process.stdout.write(`[DISCONNECT] User ${userId} removed from all rooms\n\n`);
       } else {

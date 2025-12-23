@@ -12,14 +12,14 @@ export const createConversationRoomsStore = () => {
       process.stdout.write(`\n🔵 [JOIN ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
       process.stderr.write(`[JOIN ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
       
-      if (!conversationRooms.has(conversationId)) {
-        conversationRooms.set(conversationId, new Set());
+    if (!conversationRooms.has(conversationId)) {
+      conversationRooms.set(conversationId, new Set());
         console.error(`[Join Room] ✅ Created new room for conversation ${conversationId}`);
         process.stdout.write(`[Join Room] ✅ Created new room for conversation ${conversationId}\n`);
-      }
-      const room = conversationRooms.get(conversationId)!;
+    }
+    const room = conversationRooms.get(conversationId)!;
       const wasAlreadyInRoom = room.has(userId);
-      room.add(userId);
+    room.add(userId);
       
       const usersInRoom = Array.from(room);
       console.error(`[Join Room] User ${userId} ${wasAlreadyInRoom ? 'already in' : 'joined'} conversation ${conversationId}`);
@@ -46,9 +46,9 @@ export const createConversationRoomsStore = () => {
       process.stdout.write(`\n🔴 [LEAVE ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
       process.stderr.write(`[LEAVE ROOM] User: ${userId}, Conversation: ${conversationId}\n`);
       
-      const room = conversationRooms.get(conversationId);
-      if (room) {
-        const wasInRoom = room.has(userId);
+    const room = conversationRooms.get(conversationId);
+    if (room) {
+      const wasInRoom = room.has(userId);
         const roomSizeBefore = room.size;
         const usersBefore = Array.from(room);
         
@@ -56,17 +56,17 @@ export const createConversationRoomsStore = () => {
         process.stdout.write(`[Leave Room] Room exists: ✅, User was in room: ${wasInRoom ? 'YES' : 'NO'}, Size before: ${roomSizeBefore}\n`);
         
         if (wasInRoom) {
-          room.delete(userId);
+      room.delete(userId);
           const roomSizeAfter = room.size;
           const usersAfter = Array.from(room);
-          
+      
           console.error(`[Leave Room] ✅ User ${userId} REMOVED from conversation ${conversationId}`);
           console.error(`[Leave Room] Room size: ${roomSizeBefore} → ${roomSizeAfter}`);
           process.stdout.write(`[Leave Room] ✅ User ${userId} REMOVED from conversation ${conversationId}\n`);
           process.stdout.write(`[Leave Room] Room size: ${roomSizeBefore} → ${roomSizeAfter}\n`);
-          
-          if (room.size === 0) {
-            conversationRooms.delete(conversationId);
+      
+      if (room.size === 0) {
+        conversationRooms.delete(conversationId);
             console.error(`[Leave Room] 🗑️ Room ${conversationId} DELETED (empty)`);
             process.stdout.write(`[Leave Room] 🗑️ Room ${conversationId} DELETED (empty)\n\n`);
           } else {
@@ -115,8 +115,8 @@ export const createConversationRoomsStore = () => {
 
   const getUsersInConversationRoom = (conversationId: string): string[] => {
     try {
-      const room = conversationRooms.get(conversationId);
-      const users = room ? Array.from(room) : [];
+    const room = conversationRooms.get(conversationId);
+    const users = room ? Array.from(room) : [];
       
       // Log every call for debugging
       console.error(`🟡 [GET ROOM] Conversation: ${conversationId}, Room exists: ${!!room}, Size: ${room?.size || 0}, Users: [${users.join(", ")}]`);
@@ -124,7 +124,7 @@ export const createConversationRoomsStore = () => {
         process.stdout.write(`🟡 [GET ROOM] Conversation: ${conversationId}, Users: [${users.join(", ")}], Size: ${room?.size || 0}\n`);
       }
       
-      return users;
+    return users;
     } catch (error: any) {
       console.error(`[Get Room] ❌ ERROR:`, error);
       return [];

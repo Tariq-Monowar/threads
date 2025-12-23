@@ -185,12 +185,47 @@ export const createConversation = async (request, reply) => {
     };
 
     /**
+     * Helper: Check if conversation is blocked (only for private conversations)
+     */
+    const checkIfBlocked = async (prisma: any, conversation: any, currentUserId: number) => {
+      if (conversation.isGroup) {
+        return false;
+      }
+
+      const otherMember = conversation.members.find(
+        (member: any) => member.userId !== currentUserId
+      );
+
+      if (!otherMember || !otherMember.userId) {
+        return false;
+      }
+
+      const blockCheck = await prisma.block.findFirst({
+        where: {
+          OR: [
+            {
+              blockerId: currentUserId,
+              blockedId: otherMember.userId,
+            },
+            {
+              blockerId: otherMember.userId,
+              blockedId: currentUserId,
+            },
+          ],
+        },
+      });
+
+      return !!blockCheck;
+    };
+
+    /**
      * Helper: Prepare conversation response for current user
      */
-    const prepareConversationResponse = (
+    const prepareConversationResponse = async (
       conversation: any,
       currentUserId: number,
       messages: any[] = [],
+      prisma: any,
       customMessage?: string
     ) => {
       const filteredConversation = excludeCurrentUserFromConversation(
@@ -206,12 +241,16 @@ export const createConversation = async (request, reply) => {
         filteredConversation.members
       );
 
+      // Check if blocked (only for private conversations)
+      const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
+
       const response: any = {
         success: true,
         data: {
           ...filteredConversation,
           members: formattedMembers,
           messages,
+          isBlocked, // Add isBlocked field
         },
       };
 
@@ -238,13 +277,31 @@ export const createConversation = async (request, reply) => {
         participantIds
       );
 
-      const response = prepareConversationResponse(
+      const response = await prepareConversationResponse(
         existingConversation,
         currentUserId,
-        messages
+        messages,
+        prisma
       );
 
       return reply.send(response);
+    }
+
+    // Check if users are blocked before creating new conversation
+    const isBlocked = await prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: currentUserId, blockedId: otherUserIdInt },
+          { blockerId: otherUserIdInt, blockedId: currentUserId },
+        ],
+      },
+    });
+
+    if (isBlocked) {
+      return reply.status(403).send({
+        success: false,
+        message: "Cannot create conversation. User is blocked.",
+      });
     }
 
     // Check for deleted conversation (for message only, we always create new)
@@ -254,7 +311,7 @@ export const createConversation = async (request, reply) => {
       otherUserIdInt
     );
 
-    // Always create a new conversation
+    // Create a new conversation
     const newConversation = await createNewPrivateConversation(
       prisma,
       currentUserId,
@@ -280,10 +337,11 @@ export const createConversation = async (request, reply) => {
       ? "New conversation created (previous conversation was deleted)"
       : undefined;
 
-    const response = prepareConversationResponse(
+    const response = await prepareConversationResponse(
       newConversation,
       currentUserId,
       [],
+      prisma,
       responseMessage
     );
 
@@ -476,6 +534,38 @@ export const getConversationsByUserId = async (request, reply) => {
       };
     });
 
+    // Check if blocked (only for private conversations)
+    const isBlocked = await (async () => {
+      if (conversation.isGroup) {
+        return false;
+      }
+
+      const otherMember = conversation.members.find(
+        (member: any) => member.userId !== currentUserId
+      );
+
+      if (!otherMember || !otherMember.userId) {
+        return false;
+      }
+
+      const blockCheck = await prisma.block.findFirst({
+        where: {
+          OR: [
+            {
+              blockerId: currentUserId,
+              blockedId: otherMember.userId,
+            },
+            {
+              blockerId: otherMember.userId,
+              blockedId: currentUserId,
+            },
+          ],
+        },
+      });
+
+      return !!blockCheck;
+    })();
+
     const transformedConversation = {
       ...conversation,
       members: processConversationMembers(
@@ -486,6 +576,7 @@ export const getConversationsByUserId = async (request, reply) => {
       messages: transformedMessages,
       avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
       unreadCount,
+      isBlocked, // Add isBlocked field
     };
 
     return reply.send({

@@ -1,6 +1,6 @@
 import { FileService } from "../../../utils/fileService";
 
-// Block a user
+
 export const blockUser = async (request, reply) => {
     const prisma = request.server.prisma;
   
@@ -8,7 +8,6 @@ export const blockUser = async (request, reply) => {
       const myId = Number(request.body.myId);
       const otherId = Number(request.body.otherId);
   
-      // basic validation
       if (!myId || !otherId) {
         return reply.status(400).send({
           success: false,
@@ -37,6 +36,20 @@ export const blockUser = async (request, reply) => {
           message: "One or both users not found",
         });
       }
+
+      // Find conversation between the two users (if exists)
+      const conversation = await prisma.conversation.findFirst({
+        where: {
+          isGroup: false,
+          AND: [
+            { members: { some: { userId: myId, isDeleted: false } } },
+            { members: { some: { userId: otherId, isDeleted: false } } },
+          ],
+        },
+        select: {
+          id: true,
+        },
+      });
   
       // block create (unique constraint handles duplicate)
       const block = await prisma.block.create({
@@ -57,6 +70,7 @@ export const blockUser = async (request, reply) => {
       });
   
       const data = {
+        conversationId: conversation?.id || null,
         myId: block.blockerId,
         otherId: block.blocked.id,
         name: block.blocked.name,
@@ -150,8 +164,23 @@ export const unblockUser = async (request, reply) => {
       });
     }
 
+    // Find conversation between the two users (if exists)
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: myIdInt, isDeleted: false } } },
+          { members: { some: { userId: otherIdInt, isDeleted: false } } },
+        ],
+      },
+      select: {
+        id: true,
+      },
+    });
+
     // Format block data before deleting
     const formattedBlock = {
+      conversationId: conversation?.id || null,
       myId: existingBlock.blockerId,
       otherId: existingBlock.blocked.id,
       name: existingBlock.blocked.name,
@@ -172,8 +201,8 @@ export const unblockUser = async (request, reply) => {
       },
     });
 
-    // Send socket event to the other user
-    request.server.io.emit("unblockUser", { formattedBlock });
+    // Send socket event
+    request.server.io.emit("unblockUser", formattedBlock);
 
     return reply.send({
       success: true,

@@ -17,6 +17,7 @@ export const addMute = async (request, reply) => {
         message: "Invalid myId provided!",
       });
     }
+    
 
     if (conversationIds.length === 0) {
       return reply.status(400).send({

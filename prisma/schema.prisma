@@ -28,6 +28,10 @@ model User {
   callsMade     Call[] @relation("CallerCalls")
   callsReceived Call[] @relation("ReceiverCalls")
 
+  // Block relations
+  blockedByMe Block[] @relation("Blocker")
+  blockedMe   Block[] @relation("Blocked")
+
   @@index([name])
   @@index([email])
   @@map("users")
@@ -54,8 +58,8 @@ model Conversation {
   allowEditGroupInfo Boolean @default(false)
 
   // Relations
-  members  ConversationMember[]
-  messages Message[]
+  members  ConversationMember[] //jader ami block korechi
+  messages Message[] //zatra make blocak noreche
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -77,6 +81,12 @@ model ConversationMember {
 
   isDeleted Boolean   @default(false)
   deletedAt DateTime?
+
+  isArchived Boolean   @default(false)
+  archivedAt DateTime?
+
+  isMute Boolean   @default(false)
+  muteAt DateTime?
 
   @@unique([userId, conversationId])
   @@map("conversation_members")
@@ -170,3 +180,33 @@ enum CallStatus {
   DECLINED
   CANCELED
 }
+
+model Block {
+  id Int @id @default(autoincrement())
+
+  blockerId Int
+  blockedId Int
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@map("blocks")
+}
+
+
+
+// 1. Block - unblock (সিঙ্গেল কনভার্সেশন এর ক্ষেত্রে myId এবং otherUserId দিয়ে যেনো ব্লক করা যায়, আর গ্রুপ হলে কনভার্সেশন id পাঠাবো। একটা api তেই অপশনাল করে দিবেন)
+// Block - unblock এর socket listen (server - client) ইভেন্ট ও লাগবে
+
+// 2. Get blocked conversation list
+// 2. Set conversation as archived
+// 3. Remove conv from archived
+// 4. Get archived conv list
+// 5. Mute
+// 6. Unmute
+// 7. Group create role ( Group create কে কেউ রিমুভ করতে পারবে না)
+// 8. Member list hide setting in group  ( member list hide থাকলে গ্রুপ এর মেম্বার লিস্ট admin ছাড়া নর্মাল।মেম্বার রা কেউ দেখতে পারবে না)
+// 9. Conversation delete

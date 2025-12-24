@@ -102,14 +102,59 @@ export const getMyConversationsList = async (request, reply) => {
     };
 
     /**
+     * Helper: Check if conversation is blocked (only for private conversations)
+     */
+    const checkIfBlocked = async (prisma, conversation, currentUserId) => {
+      // Only check for private conversations
+      if (conversation.isGroup) {
+        return false;
+      }
+
+      // Get the other user in private conversation
+      const otherMember = conversation.members.find(
+        (member) => member.userId !== currentUserId
+      );
+
+      if (!otherMember || !otherMember.userId) {
+        return false;
+      }
+
+      // Check if current user blocked the other user OR other user blocked current user
+      const blockCheck = await prisma.block.findFirst({
+        where: {
+          OR: [
+            {
+              blockerId: currentUserId,
+              blockedId: otherMember.userId,
+            },
+            {
+              blockerId: otherMember.userId,
+              blockedId: currentUserId,
+            },
+          ],
+        },
+      });
+
+      return !!blockCheck;
+    };
+
+    /**
      * Helper: Transform a single conversation
      */
-    const transformConversation = (
+    const transformConversation = async (
       conversation,
       currentUserId,
-      unreadCount
+      unreadCount,
+      prisma
     ) => {
       const participantIds = getParticipantIds(conversation.members);
+      const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
+      
+      // Get current user's member record to check isMute
+      const currentUserMember = conversation.members.find(
+        (member) => member.userId === currentUserId
+      );
+      const isMute = currentUserMember?.isMute || false;
 
       return {
         ...conversation,
@@ -125,6 +170,8 @@ export const getMyConversationsList = async (request, reply) => {
           ? getImageUrl(conversation.avatar)
           : null,
         unreadCount,
+        isBlocked, // Add isBlocked field for frontend
+        isMute, // Add isMute field for frontend
       };
     };
 
@@ -156,6 +203,7 @@ export const getMyConversationsList = async (request, reply) => {
           some: {
             userId: currentUserId,
             isDeleted: false,
+            isArchived: false, // Exclude archived conversations
           },
         },
       };
@@ -220,12 +268,15 @@ export const getMyConversationsList = async (request, reply) => {
       currentUserId
     );
 
-    // Transform conversations
-    const transformedConversations = conversations.map((conversation) =>
-      transformConversation(
-        conversation,
-        currentUserId,
-        unreadCountsMap[conversation.id] || 0
+    // Transform conversations (with async block check)
+    const transformedConversations = await Promise.all(
+      conversations.map(async (conversation) =>
+        transformConversation(
+          conversation,
+          currentUserId,
+          unreadCountsMap[conversation.id] || 0,
+          prisma
+        )
       )
     );
 
@@ -391,6 +442,38 @@ export const getSingleConversation = async (request, reply) => {
       return unreadCount;
     };
 
+    // Helper: Check if conversation is blocked (only for private conversations)
+    const checkIfBlocked = async (prisma, conversation, currentUserId) => {
+      if (conversation.isGroup) {
+        return false;
+      }
+
+      const otherMember = conversation.members.find(
+        (member) => member.userId !== currentUserId
+      );
+
+      if (!otherMember || !otherMember.userId) {
+        return false;
+      }
+
+      const blockCheck = await prisma.block.findFirst({
+        where: {
+          OR: [
+            {
+              blockerId: currentUserId,
+              blockedId: otherMember.userId,
+            },
+            {
+              blockerId: otherMember.userId,
+              blockedId: currentUserId,
+            },
+          ],
+        },
+      });
+
+      return !!blockCheck;
+    };
+
     // Get participant IDs and unread count
     const participantIds = getParticipantIds(conversation.members);
     const unreadCount = await countUnreadMessages(
@@ -398,6 +481,15 @@ export const getSingleConversation = async (request, reply) => {
       conversationId,
       currentUserId
     );
+
+    // Check if blocked
+    const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
+
+    // Get current user's member record to check isMute
+    const currentUserMember = conversation.members.find(
+      (member) => member.userId === currentUserId
+    );
+    const isMute = currentUserMember?.isMute || false;
 
     // Transform the conversation
     const transformedConversation = {
@@ -412,6 +504,8 @@ export const getSingleConversation = async (request, reply) => {
         .map((message: any) => transformMessage(message, participantIds)),
       avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
       unreadCount,
+      isBlocked, // Add isBlocked field for frontend
+      isMute, // Add isMute field for frontend
     };
 
     return reply.send({

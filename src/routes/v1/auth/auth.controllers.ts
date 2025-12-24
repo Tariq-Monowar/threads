@@ -243,8 +243,28 @@ export const searchUsers = async (request, reply) => {
 
     const prisma = request.server.prisma;
 
+    // Get list of blocked user IDs (both directions)
+    const blockedUsers = await prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: currentUserId },
+          { blockedId: currentUserId },
+        ],
+      },
+    });
+
+    const blockedUserIds = blockedUsers.map((block) => {
+      if (block.blockerId === currentUserId) {
+        return block.blockedId;
+      }
+      return block.blockerId;
+    });
+
     let whereCondition: any = {
-      id: { not: currentUserId },
+      id: { 
+        not: currentUserId,
+        notIn: blockedUserIds, // Exclude blocked users
+      },
     };
 
     if (search && search.trim() !== "") {

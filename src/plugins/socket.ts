@@ -38,6 +38,7 @@ export default fp(async (fastify) => {
     leaveConversationRoom,
     isUserInConversationRoom,
     getUsersInConversationRoom,
+    debugGetAllRooms,
   } = createConversationRoomsStore();
 
   const {
@@ -130,6 +131,19 @@ export default fp(async (fastify) => {
       socket.emit("online-users", getOnlineUserIds());
     });
 
+    // Debug: Get conversation room state
+    socket.on("debug_get_room_state", ({ conversationId }: { conversationId: string }) => {
+      const users = getUsersInConversationRoom(conversationId);
+      const allRooms = debugGetAllRooms();
+      socket.emit("debug_room_state", {
+        conversationId,
+        usersInRoom: users,
+        allRooms,
+      });
+      process.stdout.write(`[DEBUG] Room state requested for ${conversationId}: [${users.join(", ")}]\n`);
+      process.stdout.write(`[DEBUG] All rooms: ${JSON.stringify(allRooms)}\n`);
+    });
+
     // 4. Join Conversation Room
     socket.on(
       "join_conversation",
@@ -148,7 +162,35 @@ export default fp(async (fastify) => {
         console.log("conversationId", conversationId);
         console.log("userId", userId);
         const userIdStr = userId.toString();
+        
+        // Get room state BEFORE joining
+        const roomStateBeforeJoin = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET JOIN] BEFORE: Room users: [${roomStateBeforeJoin.join(", ")}]\n`);
+        
+        // Verify function exists before calling
+        if (typeof joinConversationRoom !== 'function') {
+          console.error(`❌ [SOCKET JOIN] ERROR: joinConversationRoom is not a function! Type: ${typeof joinConversationRoom}`);
+          process.stderr.write(`❌ [SOCKET JOIN] ERROR: joinConversationRoom is not a function!\n`);
+        } else {
+          console.error(`✅ [SOCKET JOIN] joinConversationRoom is a function, calling now...`);
+          process.stdout.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
+          process.stderr.write(`[SOCKET JOIN] Calling joinConversationRoom for user ${userIdStr}...\n`);
+          
+          try {
         joinConversationRoom(userIdStr, conversationId);
+            console.error(`✅ [SOCKET JOIN] joinConversationRoom call completed`);
+          } catch (error: any) {
+            console.error(`❌ [SOCKET JOIN] ERROR calling joinConversationRoom:`, error);
+            process.stderr.write(`❌ [SOCKET JOIN] ERROR: ${error?.message || error}\n`);
+          }
+        }
+        
+        // Get room state AFTER joining
+        const roomStateAfterJoin = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}]\n`);
+        process.stderr.write(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}]\n`);
+        console.error(`[SOCKET JOIN] AFTER: Room users: [${roomStateAfterJoin.join(", ")}], User ${userIdStr} in room: ${roomStateAfterJoin.includes(userIdStr)}`);
+        process.stdout.write(`[SOCKET JOIN] User ${userIdStr} should now be in room: ${roomStateAfterJoin.includes(userIdStr)}\n\n`);
 
         socket.emit("conversation_joined", {
           conversationId,
@@ -221,24 +263,69 @@ export default fp(async (fastify) => {
         console.log("conversationId", conversationId);
         console.log("userId", userId);
 
-        leaveConversationRoom(userId, conversationId);
-        socket.emit("conversation_left", { conversationId, userId });
-        try {
-          const userIdInt = parseInt(userId);
-          if (!Number.isNaN(userIdInt)) {
-            const updateResult = await fastify.prisma.message.updateMany({
-              where: {
-                conversationId,
-                isRead: true,
-                NOT: { userId: userIdInt },
-              },
-              data: {
-                isRead: false,
-                isDelivered: false,
-              },
-            });
+        // Convert userId to string for consistency (same as join_conversation)
+        const userIdStr = userId.toString();
+        
+        // Check if user is in room before leaving (for debugging)
+        const wasInRoomBefore = isUserInConversationRoom(userIdStr, conversationId);
+        console.log(`[Leave Room] User ${userIdStr} was in room ${conversationId} before leave: ${wasInRoomBefore}`);
+        
+        // Get room state BEFORE leaving
+        const roomStateBefore = getUsersInConversationRoom(conversationId);
+        process.stdout.write(`[SOCKET LEAVE] BEFORE: Room users: [${roomStateBefore.join(", ")}]\n`);
+        
+        // Remove user from conversation room
+        let wasRemoved = false;
+        // Verify function exists before calling
+        if (typeof leaveConversationRoom !== 'function') {
+          console.error(`❌ [SOCKET LEAVE] ERROR: leaveConversationRoom is not a function! Type: ${typeof leaveConversationRoom}`);
+          process.stderr.write(`❌ [SOCKET LEAVE] ERROR: leaveConversationRoom is not a function!\n`);
+        } else {
+          console.error(`✅ [SOCKET LEAVE] leaveConversationRoom is a function, calling now...`);
+          process.stdout.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
+          process.stderr.write(`[SOCKET LEAVE] Calling leaveConversationRoom for user ${userIdStr}...\n`);
+          
+          try {
+            wasRemoved = leaveConversationRoom(userIdStr, conversationId);
+            console.error(`✅ [SOCKET LEAVE] leaveConversationRoom call completed, returned: ${wasRemoved}`);
+          } catch (error: any) {
+            console.error(`❌ [SOCKET LEAVE] ERROR calling leaveConversationRoom:`, error);
+            process.stderr.write(`❌ [SOCKET LEAVE] ERROR: ${error?.message || error}\n`);
           }
-        } catch (error: any) {}
+          process.stdout.write(`[SOCKET LEAVE] leaveConversationRoom returned: ${wasRemoved}\n`);
+        }
+        
+        // Verify user was removed (for debugging) - check multiple times to ensure consistency
+        const stillInRoom1 = isUserInConversationRoom(userIdStr, conversationId);
+        const stillInRoom2 = isUserInConversationRoom(userIdStr, conversationId); // Double check
+        
+        // Get current room state for verification
+        const currentRoomUsers = getUsersInConversationRoom(conversationId);
+        const isInRoomList = currentRoomUsers.includes(userIdStr);
+        
+        process.stdout.write(`[SOCKET LEAVE] AFTER: Room users: [${currentRoomUsers.join(", ")}]\n`);
+        process.stdout.write(`[SOCKET LEAVE] Verification: stillInRoom1=${stillInRoom1}, stillInRoom2=${stillInRoom2}, isInRoomList=${isInRoomList}\n`);
+        
+        if (wasRemoved && !stillInRoom1 && !stillInRoom2 && !isInRoomList) {
+          console.log(`[Leave Room] ✅ SUCCESS: User ${userIdStr} successfully removed from room ${conversationId}`);
+          console.log(`[Leave Room] Current users in room: [${currentRoomUsers.join(", ")}]`);
+        } else if (stillInRoom1 || stillInRoom2 || isInRoomList) {
+          console.error(`[Leave Room] ❌ ERROR: User ${userIdStr} STILL in room ${conversationId} after leaving!`);
+          console.error(`[Leave Room] wasRemoved: ${wasRemoved}, stillInRoom1: ${stillInRoom1}, stillInRoom2: ${stillInRoom2}, isInRoomList: ${isInRoomList}`);
+          console.error(`[Leave Room] Current room users: [${currentRoomUsers.join(", ")}]`);
+          
+          // Force remove if still present (safety measure)
+          if (wasInRoomBefore) {
+            console.warn(`[Leave Room] Attempting force remove for user ${userIdStr}`);
+            const forceRemoved = leaveConversationRoom(userIdStr, conversationId);
+            console.warn(`[Leave Room] Force remove result: ${forceRemoved}`);
+          }
+        } else if (!wasRemoved && !wasInRoomBefore) {
+          console.log(`[Leave Room] ℹ️ User ${userIdStr} was not in room ${conversationId} (already left or never joined)`);
+        }
+        
+        socket.emit("conversation_left", { conversationId, userId: userIdStr });
+     
       }
     );
 
@@ -852,6 +939,7 @@ export default fp(async (fastify) => {
 
     // 14. Call Offer Resend (caller resends offer if missed)
     // 14. Call Offer Resend (caller resends offer if missed)
+    
     socket.on(
       "call_offer_resend",
       ({
@@ -984,12 +1072,21 @@ export default fp(async (fastify) => {
 
       // Only remove user from conversation rooms if this was their last socket
       if (remainingCount === 0) {
+        process.stdout.write(`[DISCONNECT] User ${userId} disconnected - last socket, removing from all rooms\n`);
         // Remove user from all conversation rooms
+        const roomsToLeave: string[] = [];
         for (const [conversationId, room] of conversationRooms.entries()) {
           if (room.has(userId)) {
-            leaveConversationRoom(userId, conversationId);
+            roomsToLeave.push(conversationId);
           }
         }
+        process.stdout.write(`[DISCONNECT] User ${userId} was in ${roomsToLeave.length} rooms: [${roomsToLeave.join(", ")}]\n`);
+        roomsToLeave.forEach((conversationId) => {
+            leaveConversationRoom(userId, conversationId);
+        });
+        process.stdout.write(`[DISCONNECT] User ${userId} removed from all rooms\n\n`);
+      } else {
+        process.stdout.write(`[DISCONNECT] User ${userId} disconnected but has ${remainingCount} other sockets - NOT removing from rooms\n`);
       }
 
       if (activeCalls.has(userId)) {

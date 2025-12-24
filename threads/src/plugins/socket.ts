@@ -939,6 +939,7 @@ export default fp(async (fastify) => {
 
     // 14. Call Offer Resend (caller resends offer if missed)
     // 14. Call Offer Resend (caller resends offer if missed)
+    
     socket.on(
       "call_offer_resend",
       ({

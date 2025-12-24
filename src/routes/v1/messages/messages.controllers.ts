@@ -160,10 +160,10 @@ export const sendMessage = async (request, reply) => {
       }
 
       const filesCreate = files.map((file) => ({
-        userId: userIdInt,
-        fileUrl: file.filename,
-        fileType: file.mimetype || null,
-        fileSize: typeof file.size === "number" ? file.size : null,
+            userId: userIdInt,
+            fileUrl: file.filename,
+            fileType: file.mimetype || null,
+            fileSize: typeof file.size === "number" ? file.size : null,
         fileExtension: path.extname(file.originalname || "").replace(".", "") || null,
       }));
 
@@ -187,6 +187,7 @@ export const sendMessage = async (request, reply) => {
           select: {
             userId: true,
             isAdmin: true,
+            isMute: true,
             user: { select: { id: true, fcmToken: true } },
           },
         }),
@@ -207,16 +208,16 @@ export const sendMessage = async (request, reply) => {
     const usersInRoom = request.server.getUsersInConversationRoom
       ? request.server.getUsersInConversationRoom(conversationId)
       : [];
-
+    
     const usersInRoomNumbers = usersInRoom
       .map((id) => {
         const num = typeof id === "string" ? parseInt(id, 10) : Number(id);
         return isNaN(num) ? null : num;
       })
       .filter((id): id is number => id !== null);
-
+    
     const usersInRoomSet = new Set(usersInRoomNumbers);
-
+    
     // Find recipients who are in room (not sender)
     const recipientsInRoom = transactionResult.members.filter((member) => {
       if (!member.userId || member.userId === userIdInt) return false;
@@ -230,13 +231,13 @@ export const sendMessage = async (request, reply) => {
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
     let recipientsInRoomIds: number[] = [];
-
+    
     // Mark as read/delivered if recipients are in room
     if (recipientsInRoom.length > 0) {
       recipientsInRoomIds = recipientsInRoom
         .map((m) => m.userId)
         .filter((id): id is number => typeof id === "number");
-
+      
       // Final check before marking
       const finalRecipientsInRoom = recipientsInRoomIds.filter((recipientId) => {
         return request.server.isUserInConversationRoom
@@ -248,14 +249,14 @@ export const sendMessage = async (request, reply) => {
 
       if (recipientsInRoomIds.length > 0) {
         try {
-          const updateResult = await prisma.message.update({
-            where: { id: transactionResult.message.id },
+        const updateResult = await prisma.message.update({
+          where: { id: transactionResult.message.id },
             data: { isRead: true, isDelivered: true },
-            include: {
+          include: {
               user: { select: { id: true, name: true, email: true, avatar: true } },
-              MessageFile: true,
-            },
-          });
+            MessageFile: true,
+          },
+        });
           messageForResponse = updateResult;
           wasMarkedAsRead = true;
         } catch (error) {
@@ -305,9 +306,22 @@ export const sendMessage = async (request, reply) => {
           });
         }
 
-        // Send socket events and push notifications to all members
+        // Send socket events to all members (including muted)
         for (const member of transactionResult.members) {
           if (member.userId === userIdInt) continue;
+
+          // Always send socket events (even if muted)
+          if (member.userId) {
+            request.server.io.to(member.userId.toString()).emit("new_message", response);
+          }
+        }
+
+        // Send push notifications only to non-muted members
+        for (const member of transactionResult.members) {
+          if (member.userId === userIdInt) continue;
+          
+          // Skip push notification if member has muted the conversation
+          if (member.isMute) continue;
 
           const pushData = {
             type: "new_message",
@@ -322,10 +336,6 @@ export const sendMessage = async (request, reply) => {
             }),
           };
 
-          if (member.userId) {
-            request.server.io.to(member.userId.toString()).emit("new_message", response);
-          }
-
           const fcmTokens = member.user?.fcmToken || [];
           if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
             const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
@@ -339,7 +349,7 @@ export const sendMessage = async (request, reply) => {
                         where: { id: member.userId },
                         data: {
                           fcmToken: { set: validTokens.filter((t) => t !== token) },
-                        },
+                          },
                       }).catch(() => {});
                     }
                     return result;

@@ -149,6 +149,12 @@ export const getMyConversationsList = async (request, reply) => {
     ) => {
       const participantIds = getParticipantIds(conversation.members);
       const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
+      
+      // Get current user's member record to check isMute
+      const currentUserMember = conversation.members.find(
+        (member) => member.userId === currentUserId
+      );
+      const isMute = currentUserMember?.isMute || false;
 
       return {
         ...conversation,
@@ -165,6 +171,7 @@ export const getMyConversationsList = async (request, reply) => {
           : null,
         unreadCount,
         isBlocked, // Add isBlocked field for frontend
+        isMute, // Add isMute field for frontend
       };
     };
 
@@ -196,6 +203,7 @@ export const getMyConversationsList = async (request, reply) => {
           some: {
             userId: currentUserId,
             isDeleted: false,
+            isArchived: false, // Exclude archived conversations
           },
         },
       };
@@ -477,6 +485,12 @@ export const getSingleConversation = async (request, reply) => {
     // Check if blocked
     const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
 
+    // Get current user's member record to check isMute
+    const currentUserMember = conversation.members.find(
+      (member) => member.userId === currentUserId
+    );
+    const isMute = currentUserMember?.isMute || false;
+
     // Transform the conversation
     const transformedConversation = {
       ...conversation,
@@ -491,6 +505,7 @@ export const getSingleConversation = async (request, reply) => {
       avatar: conversation.avatar ? getImageUrl(conversation.avatar) : null,
       unreadCount,
       isBlocked, // Add isBlocked field for frontend
+      isMute, // Add isMute field for frontend
     };
 
     return reply.send({

@@ -82,6 +82,12 @@ model ConversationMember {
   isDeleted Boolean   @default(false)
   deletedAt DateTime?
 
+  isArchived Boolean   @default(false)
+  archivedAt DateTime?
+
+  isMute Boolean   @default(false)
+  muteAt DateTime?
+
   @@unique([userId, conversationId])
   @@map("conversation_members")
 }

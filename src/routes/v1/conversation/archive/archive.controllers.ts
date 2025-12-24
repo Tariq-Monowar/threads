@@ -231,6 +231,40 @@ export const getMyArchiveConversationsList = async (request, reply) => {
       return !!blockCheck;
     };
 
+    const getBlockByList = async (prisma, conversation, currentUserId) => {
+      if (conversation.isGroup) {
+        return [];
+      }
+
+      const otherMember = conversation.members.find(
+        (member) => member.userId !== currentUserId
+      );
+
+      if (!otherMember || !otherMember.userId) {
+        return [];
+      }
+
+      const blocks = await prisma.block.findMany({
+        where: {
+          OR: [
+            {
+              blockerId: currentUserId,
+              blockedId: otherMember.userId,
+            },
+            {
+              blockerId: otherMember.userId,
+              blockedId: currentUserId,
+            },
+          ],
+        },
+        select: {
+          blockerId: true,
+        },
+      });
+
+      return blocks.map((block) => block.blockerId);
+    };
+
     const transformConversation = async (
       conversation,
       currentUserId,
@@ -239,6 +273,7 @@ export const getMyArchiveConversationsList = async (request, reply) => {
     ) => {
       const participantIds = getParticipantIds(conversation.members);
       const isBlocked = await checkIfBlocked(prisma, conversation, currentUserId);
+      const blockBy = await getBlockByList(prisma, conversation, currentUserId);
 
       return {
         ...conversation,
@@ -255,6 +290,7 @@ export const getMyArchiveConversationsList = async (request, reply) => {
           : null,
         unreadCount,
         isBlocked,
+        blockBy, // Add blockBy array for frontend
       };
     };
 

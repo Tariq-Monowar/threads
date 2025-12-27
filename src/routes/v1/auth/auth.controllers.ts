@@ -555,6 +555,9 @@ export const setFcmToken = async (request, reply) => {
       });
     }
 
+    // Handle JSON array - ensure it's an array and avoid duplicates
+    const updatedTokens = jsonArrayAdd<string>(user.fcmToken, fcmToken);
+
     await prisma.user.update({
       where: { id: currentUserId },
       data: { fcmToken: updatedTokens },

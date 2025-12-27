@@ -46,15 +46,99 @@ export default fp(async (fastify) => {
         return { success: false, error: "Push notifications not configured" }
       }
 
-      console.log("================================================", data);
+      console.log("[PUSH] Sending notification to token:", token.substring(0, 20) + "...");
+      console.log("[PUSH] Data payload:", data);
 
       try {
+        // Extract notification title and body from data if available
+        let notificationTitle = "New Message";
+        let notificationBody = "You have a new message!";
+        
+        if (data.type === "new_message") {
+          try {
+            const messageDataStr = data.data || "{}";
+            const messageData = typeof messageDataStr === 'string' 
+              ? JSON.parse(messageDataStr) 
+              : messageDataStr;
+            
+            const senderName = messageData?.user?.name || messageData?.user?.email || "Someone";
+            const messageText = messageData?.text || "";
+            const isGroup = messageData?.isGroup || false;
+            const hasFiles = messageData?.MessageFile && Array.isArray(messageData.MessageFile) && messageData.MessageFile.length > 0;
+            
+            if (isGroup && messageData?.conversationName) {
+              notificationTitle = messageData.conversationName;
+              if (hasFiles) {
+                notificationBody = `${senderName} sent ${messageData.MessageFile.length} file(s)`;
+              } else if (messageText) {
+                const preview = messageText.substring(0, 50);
+                notificationBody = `${senderName}: ${preview}${messageText.length > 50 ? '...' : ''}`;
+              } else {
+                notificationBody = `${senderName} sent a message`;
+              }
+            } else {
+              notificationTitle = senderName;
+              if (hasFiles) {
+                notificationBody = `Sent ${messageData.MessageFile.length} file(s)`;
+              } else if (messageText) {
+                const preview = messageText.substring(0, 100);
+                notificationBody = preview + (messageText.length > 100 ? '...' : '');
+              } else {
+                notificationBody = "Sent a message";
+              }
+            }
+          } catch (e) {
+            // Fallback to default if parsing fails
+            console.warn("[PUSH] Failed to parse message data for notification:", e);
+            console.warn("[PUSH] Raw data:", data);
+          }
+        } else if (data.type === "call_initiate") {
+          try {
+            let callerInfo: any = data.callerInfo;
+            if (typeof callerInfo === 'string') {
+              callerInfo = JSON.parse(callerInfo);
+            }
+            const callerName = callerInfo?.name || "Someone";
+            const callType = data.callType === "video" ? "video" : "audio";
+            notificationTitle = "Incoming Call";
+            notificationBody = `${callerName} is calling you (${callType})`;
+          } catch (e) {
+            console.warn("[PUSH] Failed to parse call data for notification:", e);
+          }
+        } else if (data.type === "call_ended") {
+          notificationTitle = "Call Ended";
+          notificationBody = data.reason === "completed" ? "Call completed" : "Call canceled";
+        }
+
         const messageId = await admin.messaging().send({
           token,
+          notification: {
+            title: notificationTitle,
+            body: notificationBody,
+          },
           data: {
-            data: JSON.stringify(data) || "You have a new message!",
+            ...data,
+            // Ensure data is stringified if it's an object
+            data: typeof data.data === 'string' ? data.data : JSON.stringify(data.data || {}),
+          },
+          android: {
+            priority: "high" as const,
+            notification: {
+              sound: "default",
+              channelId: "default",
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+                badge: 1,
+              },
+            },
           },
         })
+        
+        console.log("[PUSH] ✅ Notification sent successfully, messageId:", messageId);
         return { success: true, messageId }
       } catch (error: any) {
         // Handle specific Firebase errors

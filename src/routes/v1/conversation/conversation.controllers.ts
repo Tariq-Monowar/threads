@@ -82,7 +82,7 @@ export const getMyConversationsList = async (request, reply) => {
           conversationId: { in: conversationIds },
           userId: { not: currentUserId },
           isRead: false,
-          NOT: { deletedForUsers: { has: currentUserId } },
+          NOT: { deletedForUsers: { array_contains: currentUserId } },
         },
         _count: {
           id: true,
@@ -416,7 +416,7 @@ export const getSingleConversation = async (request, reply) => {
       },
       messages: {
         where: {
-          NOT: { deletedForUsers: { has: currentUserId } },
+          NOT: { deletedForUsers: { array_contains: currentUserId } },
         },
         // ── ASCENDING ORDER (oldest first) ────────────────────────
         orderBy: { createdAt: "asc" },
@@ -479,7 +479,7 @@ export const getSingleConversation = async (request, reply) => {
           conversationId,
           userId: { not: currentUserId },
           isRead: false,
-          NOT: { deletedForUsers: { has: currentUserId } },
+          NOT: { deletedForUsers: { array_contains: currentUserId } },
         },
       });
       return unreadCount;

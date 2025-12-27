@@ -188,7 +188,12 @@ export const sendMessage = async (request, reply) => {
             userId: true,
             isAdmin: true,
             isMute: true,
-            user: { select: { id: true, fcmToken: true } },
+            user: { 
+              select: { 
+                id: true, 
+                fcmToken: true 
+              } 
+            },
           },
         }),
         tx.conversation.update({
@@ -200,7 +205,12 @@ export const sendMessage = async (request, reply) => {
       return { message, members, conversation };
     });
 
-    
+    // Log member data for debugging
+    request.log.info(`[DEBUG] Transaction completed. Members count: ${transactionResult.members.length}`);
+    transactionResult.members.forEach((m) => {
+      request.log.info(`[DEBUG] Member ${m.userId}: isMute=${m.isMute}, hasUser=${!!m.user}, fcmTokens=${m.user?.fcmToken?.length || 0}`);
+    });
+
     const participantIds = transactionResult.members
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");
@@ -277,6 +287,7 @@ export const sendMessage = async (request, reply) => {
     // Send notifications asynchronously
     setImmediate(async () => {
       try {
+        request.log.info(`[PUSH] Starting push notification process for conversation ${conversationId}`);
         const pushPromises: Promise<any>[] = [];
 
         // Emit read/delivered status if message was marked
@@ -317,13 +328,48 @@ export const sendMessage = async (request, reply) => {
           }
         }
 
+        request.log.info(`[PUSH] Total members: ${transactionResult.members.length}, Sender: ${userIdInt}`);
+
         // Send push notifications only to non-muted members
         for (const member of transactionResult.members) {
-          if (member.userId === userIdInt) continue;
+          if (member.userId === userIdInt) {
+            request.log.info(`[PUSH] Skipping sender ${member.userId}`);
+            continue;
+          }
+          
+          request.log.info(`[PUSH] Processing member ${member.userId}, isMute: ${member.isMute}`);
           
           // Skip push notification if member has muted the conversation
           if (member.isMute) {
-            request.log.info(`Skipping push notification for muted member ${member.userId}`);
+            request.log.info(`[PUSH] Skipping push notification for muted member ${member.userId}`);
+            continue;
+          }
+
+          // Check if user data exists
+          if (!member.user) {
+            request.log.warn(`[PUSH] No user data found for member ${member.userId}`);
+            continue;
+          }
+
+          const fcmTokens = member.user.fcmToken || [];
+          request.log.info(`[PUSH] Member ${member.userId} has ${fcmTokens.length} FCM token(s)`);
+          
+          if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
+            request.log.warn(`[PUSH] No FCM tokens found for member ${member.userId}`);
+            continue;
+          }
+
+          const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
+          if (validTokens.length === 0) {
+            request.log.warn(`[PUSH] No valid FCM tokens for member ${member.userId}`);
+            continue;
+          }
+
+          request.log.info(`[PUSH] Sending push notification to member ${member.userId} (${validTokens.length} token(s))`);
+
+          // Check if sendDataPush method exists
+          if (!request.server.sendDataPush) {
+            request.log.error(`[PUSH] sendDataPush method not available on server`);
             continue;
           }
 
@@ -341,60 +387,50 @@ export const sendMessage = async (request, reply) => {
             }),
           };
 
-          const fcmTokens = member.user?.fcmToken || [];
-          if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
-            request.log.warn(` No FCM tokens found for member ${member.userId}`);
-            continue;
-          }
-
-          const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
-          if (validTokens.length === 0) {
-            request.log.warn(` No valid FCM tokens for member ${member.userId}`);
-            continue;
-          }
-
-          request.log.info(`Sending push notification to member ${member.userId} (${validTokens.length} token(s))`);
-
-          // Check if sendDataPush method exists
-          if (!request.server.sendDataPush) {
-            request.log.error(`sendDataPush method not available on server`);
-            continue;
-          }
+          request.log.info(`[PUSH] Push data prepared for member ${member.userId}:`, JSON.stringify(pushData, null, 2));
 
           for (const token of validTokens) {
+            request.log.info(`[PUSH] Attempting to send push to token: ${token.substring(0, 20)}...`);
             pushPromises.push(
               request.server.sendDataPush(token, pushData)
                 .then((result) => {
                   if (result.success) {
-                    request.log.info(`Push notification sent successfully to member ${member.userId}`);
+                    request.log.info(`[PUSH] ✅ Push notification sent successfully to member ${member.userId}, messageId: ${result.messageId}`);
                   } else {
-                    request.log.warn(`Push notification failed for member ${member.userId}: ${result.error || "Unknown error"}`);
+                    request.log.warn(`[PUSH] ❌ Push notification failed for member ${member.userId}: ${result.error || "Unknown error"}, code: ${result.code || "N/A"}`);
                   }
                   if (!result.success && result.shouldRemoveToken && member.userId) {
+                    request.log.info(`[PUSH] Removing invalid token for member ${member.userId}`);
                     prisma.user.update({
                       where: { id: member.userId },
                       data: {
                         fcmToken: { set: validTokens.filter((t) => t !== token) },
                       },
                     }).catch((err) => {
-                      request.log.error(`Failed to remove invalid token for user ${member.userId}: ${err.message}`);
+                      request.log.error(`[PUSH] Failed to remove invalid token for user ${member.userId}: ${err.message}`);
                     });
                   }
                   return result;
                 })
                 .catch((error) => {
-                  request.log.error(` Push notification error for member ${member.userId}: ${error.message || error}`);
+                  request.log.error(`[PUSH] ❌ Push notification error for member ${member.userId}: ${error.message || error}`, error);
                   return { success: false, error: error.message || "Unknown error" };
                 })
             );
           }
         }
 
+        request.log.info(`[PUSH] Total push promises: ${pushPromises.length}`);
         if (pushPromises.length > 0) {
-          await Promise.allSettled(pushPromises);
+          const results = await Promise.allSettled(pushPromises);
+          const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+          const failed = results.length - successful;
+          request.log.info(`[PUSH] Push notification results: ${successful} successful, ${failed} failed`);
+        } else {
+          request.log.warn(`[PUSH] No push notifications to send`);
         }
       } catch (error) {
-        request.log.error(error);
+        request.log.error(`[PUSH] ❌ Error in push notification process:`, error);
       }
     });
 

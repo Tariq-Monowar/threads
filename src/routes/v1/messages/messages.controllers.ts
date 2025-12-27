@@ -200,6 +200,7 @@ export const sendMessage = async (request, reply) => {
       return { message, members, conversation };
     });
 
+    
     const participantIds = transactionResult.members
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");

@@ -159,23 +159,25 @@ export const sendMessage = async (request, reply) => {
         throw new Error("Conversation not found or you don't have access to it");
       }
 
-      const filesCreate = files.map((file) => ({
+      const filesCreate = files.length > 0
+        ? files.map((file) => ({
             userId: userIdInt,
             fileUrl: file.filename,
             fileType: file.mimetype || null,
             fileSize: typeof file.size === "number" ? file.size : null,
-        fileExtension: path.extname(file.originalname || "").replace(".", "") || null,
-      }));
+            fileExtension: path.extname(file.originalname || "").replace(".", "") || null,
+          }))
+        : [];
 
       const [message, members] = await Promise.all([
         tx.message.create({
           data: {
-            text: text && text.trim() !== "" ? text : null,
+            text: text?.trim() || null,
             userId: userIdInt,
             conversationId,
             isRead: false,
             isDelivered: false,
-            ...(filesCreate.length ? { MessageFile: { create: filesCreate } } : {}),
+            ...(filesCreate.length > 0 ? { MessageFile: { create: filesCreate } } : {}),
           },
           include: {
             user: { select: { id: true, name: true, email: true, avatar: true } },
@@ -188,12 +190,7 @@ export const sendMessage = async (request, reply) => {
             userId: true,
             isAdmin: true,
             isMute: true,
-            user: { 
-              select: { 
-                id: true, 
-                fcmToken: true 
-              } 
-            },
+            user: { select: { id: true, fcmToken: true } },
           },
         }),
         tx.conversation.update({
@@ -205,12 +202,6 @@ export const sendMessage = async (request, reply) => {
       return { message, members, conversation };
     });
 
-    // Log member data for debugging
-    request.log.info(`[DEBUG] Transaction completed. Members count: ${transactionResult.members.length}`);
-    transactionResult.members.forEach((m) => {
-      request.log.info(`[DEBUG] Member ${m.userId}: isMute=${m.isMute}, hasUser=${!!m.user}, fcmTokens=${m.user?.fcmToken?.length || 0}`);
-    });
-
     const participantIds = transactionResult.members
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");
@@ -220,59 +211,43 @@ export const sendMessage = async (request, reply) => {
       ? request.server.getUsersInConversationRoom(conversationId)
       : [];
     
-    const usersInRoomNumbers = usersInRoom
-      .map((id) => {
-        const num = typeof id === "string" ? parseInt(id, 10) : Number(id);
-        return isNaN(num) ? null : num;
-      })
-      .filter((id): id is number => id !== null);
-    
-    const usersInRoomSet = new Set(usersInRoomNumbers);
+    const usersInRoomSet = new Set(
+      usersInRoom
+        .map((id) => {
+          const num = typeof id === "string" ? parseInt(id, 10) : Number(id);
+          return isNaN(num) ? null : num;
+        })
+        .filter((id): id is number => id !== null)
+    );
     
     // Find recipients who are in room (not sender)
-    const recipientsInRoom = transactionResult.members.filter((member) => {
-      if (!member.userId || member.userId === userIdInt) return false;
-      const isInRoom = usersInRoomSet.has(member.userId);
-      const isVerified = request.server.isUserInConversationRoom
-        ? request.server.isUserInConversationRoom(member.userId.toString(), conversationId)
-        : isInRoom;
-      return isInRoom && isVerified;
-    });
+    const recipientsInRoom = transactionResult.members
+      .filter((member) => member.userId && member.userId !== userIdInt)
+      .filter((member) => {
+        if (!usersInRoomSet.has(member.userId!)) return false;
+        return request.server.isUserInConversationRoom
+          ? request.server.isUserInConversationRoom(member.userId!.toString(), conversationId)
+          : true;
+      });
 
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
-    let recipientsInRoomIds: number[] = [];
     
     // Mark as read/delivered if recipients are in room
     if (recipientsInRoom.length > 0) {
-      recipientsInRoomIds = recipientsInRoom
-        .map((m) => m.userId)
-        .filter((id): id is number => typeof id === "number");
-      
-      // Final check before marking
-      const finalRecipientsInRoom = recipientsInRoomIds.filter((recipientId) => {
-        return request.server.isUserInConversationRoom
-          ? request.server.isUserInConversationRoom(recipientId.toString(), conversationId)
-          : false;
-      });
-
-      recipientsInRoomIds = finalRecipientsInRoom;
-
-      if (recipientsInRoomIds.length > 0) {
-        try {
+      try {
         const updateResult = await prisma.message.update({
           where: { id: transactionResult.message.id },
-            data: { isRead: true, isDelivered: true },
+          data: { isRead: true, isDelivered: true },
           include: {
-              user: { select: { id: true, name: true, email: true, avatar: true } },
+            user: { select: { id: true, name: true, email: true, avatar: true } },
             MessageFile: true,
           },
         });
-          messageForResponse = updateResult;
-          wasMarkedAsRead = true;
-        } catch (error) {
-          request.log.error(error);
-        }
+        messageForResponse = updateResult;
+        wasMarkedAsRead = true;
+      } catch (error) {
+        request.log.error(error);
       }
     }
 
@@ -287,93 +262,50 @@ export const sendMessage = async (request, reply) => {
     // Send notifications asynchronously
     setImmediate(async () => {
       try {
-        request.log.info(`[PUSH] Starting push notification process for conversation ${conversationId}`);
         const pushPromises: Promise<any>[] = [];
 
         // Emit read/delivered status if message was marked
-        if (wasMarkedAsRead && recipientsInRoomIds.length > 0) {
-          const readStatusData = {
+        if (wasMarkedAsRead) {
+          const statusData = {
             success: true,
             conversationId,
             markedBy: userIdInt,
             markedAsRead: true,
-            messageId: messageForResponse.id,
-            recipientsInRoom: recipientsInRoomIds,
-          };
-
-          const deliveredStatusData = {
-            success: true,
-            conversationId,
-            markedBy: userIdInt,
             isDelivered: true,
             messageId: messageForResponse.id,
-            recipientsInRoom: recipientsInRoomIds,
           };
 
           transactionResult.members.forEach((member) => {
             if (member.userId) {
-              request.server.io.to(member.userId.toString()).emit("messages_marked_read", readStatusData);
-              request.server.io.to(member.userId.toString()).emit("message_delivered", deliveredStatusData);
+              request.server.io.to(member.userId.toString()).emit("messages_marked_read", statusData);
+              request.server.io.to(member.userId.toString()).emit("message_delivered", statusData);
             }
           });
         }
 
         // Send socket events to all members (including muted)
-        for (const member of transactionResult.members) {
-          if (member.userId === userIdInt) continue;
-
-          // Always send socket events (even if muted)
-          if (member.userId) {
+        transactionResult.members.forEach((member) => {
+          if (member.userId && member.userId !== userIdInt) {
             request.server.io.to(member.userId.toString()).emit("new_message", response);
           }
-        }
-
-        request.log.info(`[PUSH] Total members: ${transactionResult.members.length}, Sender: ${userIdInt}`);
+        });
 
         // Send push notifications only to non-muted members
-        for (const member of transactionResult.members) {
-          if (member.userId === userIdInt) {
-            request.log.info(`[PUSH] Skipping sender ${member.userId}`);
-            continue;
-          }
-          
-          request.log.info(`[PUSH] Processing member ${member.userId}, isMute: ${member.isMute}`);
-          
-          // Skip push notification if member has muted the conversation
-          if (member.isMute) {
-            request.log.info(`[PUSH] Skipping push notification for muted member ${member.userId}`);
-            continue;
-          }
+        if (!request.server.sendDataPush) {
+          request.log.warn("sendDataPush method not available");
+          return;
+        }
 
-          // Check if user data exists
-          if (!member.user) {
-            request.log.warn(`[PUSH] No user data found for member ${member.userId}`);
-            continue;
-          }
+        for (const member of transactionResult.members) {
+          if (member.userId === userIdInt || member.isMute || !member.user) continue;
 
           const fcmTokens = member.user.fcmToken || [];
-          request.log.info(`[PUSH] Member ${member.userId} has ${fcmTokens.length} FCM token(s)`);
-          
-          if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
-            request.log.warn(`[PUSH] No FCM tokens found for member ${member.userId}`);
-            continue;
-          }
+          const validTokens = Array.isArray(fcmTokens)
+            ? fcmTokens.filter((token): token is string => Boolean(token))
+            : [];
 
-          const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
-          if (validTokens.length === 0) {
-            request.log.warn(`[PUSH] No valid FCM tokens for member ${member.userId}`);
-            continue;
-          }
+          if (validTokens.length === 0) continue;
 
-          request.log.info(`[PUSH] Sending push notification to member ${member.userId} (${validTokens.length} token(s))`);
-
-          // Check if sendDataPush method exists
-          if (!request.server.sendDataPush) {
-            request.log.error(`[PUSH] sendDataPush method not available on server`);
-            continue;
-          }
-
-          // Prepare push data - all values must be strings (sendDataPush will stringify the entire object)
           const pushData: Record<string, string> = {
             type: "new_message",
             success: "true",
@@ -387,50 +319,30 @@ export const sendMessage = async (request, reply) => {
             }),
           };
 
-          request.log.info(`[PUSH] Push data prepared for member ${member.userId}:`, JSON.stringify(pushData, null, 2));
-
           for (const token of validTokens) {
-            request.log.info(`[PUSH] Attempting to send push to token: ${token.substring(0, 20)}...`);
             pushPromises.push(
               request.server.sendDataPush(token, pushData)
                 .then((result) => {
-                  if (result.success) {
-                    request.log.info(`[PUSH] ✅ Push notification sent successfully to member ${member.userId}, messageId: ${result.messageId}`);
-                  } else {
-                    request.log.warn(`[PUSH] ❌ Push notification failed for member ${member.userId}: ${result.error || "Unknown error"}, code: ${result.code || "N/A"}`);
-                  }
                   if (!result.success && result.shouldRemoveToken && member.userId) {
-                    request.log.info(`[PUSH] Removing invalid token for member ${member.userId}`);
                     prisma.user.update({
                       where: { id: member.userId },
                       data: {
                         fcmToken: { set: validTokens.filter((t) => t !== token) },
                       },
-                    }).catch((err) => {
-                      request.log.error(`[PUSH] Failed to remove invalid token for user ${member.userId}: ${err.message}`);
-                    });
+                    }).catch(() => {});
                   }
                   return result;
                 })
-                .catch((error) => {
-                  request.log.error(`[PUSH] ❌ Push notification error for member ${member.userId}: ${error.message || error}`, error);
-                  return { success: false, error: error.message || "Unknown error" };
-                })
+                .catch(() => ({ success: false }))
             );
           }
         }
 
-        request.log.info(`[PUSH] Total push promises: ${pushPromises.length}`);
         if (pushPromises.length > 0) {
-          const results = await Promise.allSettled(pushPromises);
-          const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-          const failed = results.length - successful;
-          request.log.info(`[PUSH] Push notification results: ${successful} successful, ${failed} failed`);
-        } else {
-          request.log.warn(`[PUSH] No push notifications to send`);
+          await Promise.allSettled(pushPromises);
         }
       } catch (error) {
-        request.log.error(`[PUSH] ❌ Error in push notification process:`, error);
+        request.log.error("Error in push notification process:", error);
       }
     });
 

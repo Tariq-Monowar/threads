@@ -321,9 +321,13 @@ export const sendMessage = async (request, reply) => {
           if (member.userId === userIdInt) continue;
           
           // Skip push notification if member has muted the conversation
-          if (member.isMute) continue;
+          if (member.isMute) {
+            request.log.info(`Skipping push notification for muted member ${member.userId}`);
+            continue;
+          }
 
-          const pushData = {
+          // Prepare push data - all values must be strings (sendDataPush will stringify the entire object)
+          const pushData: Record<string, string> = {
             type: "new_message",
             success: "true",
             message: "Message sent successfully",
@@ -337,26 +341,51 @@ export const sendMessage = async (request, reply) => {
           };
 
           const fcmTokens = member.user?.fcmToken || [];
-          if (Array.isArray(fcmTokens) && fcmTokens.length > 0) {
-            const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
+          if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
+            request.log.warn(` No FCM tokens found for member ${member.userId}`);
+            continue;
+          }
 
-            for (const token of validTokens) {
-              pushPromises.push(
-                request.server.sendDataPush(token, pushData)
-                  .then((result) => {
-                    if (!result.success && result.shouldRemoveToken && member.userId) {
-                      prisma.user.update({
-                        where: { id: member.userId },
-                        data: {
-                          fcmToken: { set: validTokens.filter((t) => t !== token) },
-                          },
-                      }).catch(() => {});
-                    }
-                    return result;
-                  })
-                  .catch(() => ({ success: false }))
-              );
-            }
+          const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
+          if (validTokens.length === 0) {
+            request.log.warn(` No valid FCM tokens for member ${member.userId}`);
+            continue;
+          }
+
+          request.log.info(`Sending push notification to member ${member.userId} (${validTokens.length} token(s))`);
+
+          // Check if sendDataPush method exists
+          if (!request.server.sendDataPush) {
+            request.log.error(`sendDataPush method not available on server`);
+            continue;
+          }
+
+          for (const token of validTokens) {
+            pushPromises.push(
+              request.server.sendDataPush(token, pushData)
+                .then((result) => {
+                  if (result.success) {
+                    request.log.info(`Push notification sent successfully to member ${member.userId}`);
+                  } else {
+                    request.log.warn(`Push notification failed for member ${member.userId}: ${result.error || "Unknown error"}`);
+                  }
+                  if (!result.success && result.shouldRemoveToken && member.userId) {
+                    prisma.user.update({
+                      where: { id: member.userId },
+                      data: {
+                        fcmToken: { set: validTokens.filter((t) => t !== token) },
+                      },
+                    }).catch((err) => {
+                      request.log.error(`Failed to remove invalid token for user ${member.userId}: ${err.message}`);
+                    });
+                  }
+                  return result;
+                })
+                .catch((error) => {
+                  request.log.error(` Push notification error for member ${member.userId}: ${error.message || error}`);
+                  return { success: false, error: error.message || "Unknown error" };
+                })
+            );
           }
         }
 

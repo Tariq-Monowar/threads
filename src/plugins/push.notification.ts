@@ -92,6 +92,12 @@ declare module "fastify" {
     sendDataPush: (
       token: string,
       data: Record<string, string>
-    ) => Promise<{ success: boolean; messageId?: string; error?: string }>
+    ) => Promise<{ 
+      success: boolean; 
+      messageId?: string; 
+      error?: string; 
+      code?: string;
+      shouldRemoveToken?: boolean;
+    }>
   }
 }

@@ -201,11 +201,13 @@ export const sendMessage = async (request, reply) => {
             },
           },
         }),
-        tx.conversation.update({
-          where: { id: conversationId },
-          data: { updatedAt: new Date() },
-        }),
       ]);
+
+      // Update conversation timestamp separately
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
 
       return { message, members, conversation };
     });
@@ -263,7 +265,10 @@ export const sendMessage = async (request, reply) => {
     // Send notifications asynchronously
     setImmediate(async () => {
       try {
-        request.log.info(`[PUSH] Starting push notification process for conversation ${conversationId}`);
+        request.log.info(`[PUSH] ========== Starting push notification process ==========`);
+        request.log.info(`[PUSH] Conversation ID: ${conversationId}, Sender: ${userIdInt}`);
+        request.log.info(`[PUSH] Total members: ${transactionResult.members.length}`);
+        request.log.info(`[PUSH] sendDataPush available: ${!!request.server.sendDataPush}`);
         const pushPromises: Promise<any>[] = [];
 
         // Emit read/delivered status if message was marked
@@ -296,9 +301,11 @@ export const sendMessage = async (request, reply) => {
 
         // Send push notifications only to non-muted members
         if (!request.server.sendDataPush) {
-          request.log.warn("sendDataPush method not available");
+          request.log.warn("[PUSH] sendDataPush method not available on server instance");
           return;
         }
+
+        request.log.info(`[PUSH] sendDataPush method is available, processing ${transactionResult.members.length} members`);
 
         for (const member of transactionResult.members) {
           if (member.userId === userIdInt) {
@@ -316,11 +323,25 @@ export const sendMessage = async (request, reply) => {
 
           // Check if user data exists
           if (!member.user) {
-            request.log.warn(`[PUSH] No user data found for member ${member.userId}`);
-            continue;
+            request.log.warn(`[PUSH] No user data found for member ${member.userId} - fetching from database`);
+            // Try to fetch user data if not loaded
+            try {
+              const userData = await prisma.user.findUnique({
+                where: { id: member.userId },
+                select: { id: true, fcmToken: true },
+              });
+              if (!userData) {
+                request.log.warn(`[PUSH] User ${member.userId} not found in database`);
+                continue;
+              }
+              member.user = userData;
+            } catch (err) {
+              request.log.error(`[PUSH] Error fetching user data for ${member.userId}:`, err);
+              continue;
+            }
           }
 
-          const fcmTokens = member.user.fcmToken || [];
+          const fcmTokens = member.user?.fcmToken || [];
           request.log.info(`[PUSH] Member ${member.userId} has ${fcmTokens.length} FCM token(s)`);
           
           if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
@@ -328,19 +349,13 @@ export const sendMessage = async (request, reply) => {
             continue;
           }
 
-          const validTokens = fcmTokens.filter((token): token is string => Boolean(token));
+          const validTokens = fcmTokens.filter((token): token is string => typeof token === 'string' && token.trim().length > 0);
           if (validTokens.length === 0) {
             request.log.warn(`[PUSH] No valid FCM tokens for member ${member.userId}`);
             continue;
           }
 
           request.log.info(`[PUSH] Sending push notification to member ${member.userId} (${validTokens.length} token(s))`);
-
-          // Check if sendDataPush method exists
-          if (!request.server.sendDataPush) {
-            request.log.error(`[PUSH] sendDataPush method not available on server`);
-            continue;
-          }
 
           // Prepare push data - all values must be strings (sendDataPush will stringify the entire object)
           const pushData: Record<string, string> = {
@@ -394,12 +409,26 @@ export const sendMessage = async (request, reply) => {
           const results = await Promise.allSettled(pushPromises);
           const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
           const failed = results.length - successful;
-          request.log.info(`[PUSH] Push notification results: ${successful} successful, ${failed} failed`);
+          request.log.info(`[PUSH] ========== Push notification summary ==========`);
+          request.log.info(`[PUSH] Total attempts: ${pushPromises.length}`);
+          request.log.info(`[PUSH] Successful: ${successful}`);
+          request.log.info(`[PUSH] Failed: ${failed}`);
+          request.log.info(`[PUSH] ===============================================`);
+          
+          // Log failed results for debugging
+          results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              request.log.error(`[PUSH] Promise ${index} rejected:`, result.reason);
+            } else if (result.status === 'fulfilled' && !result.value?.success) {
+              request.log.warn(`[PUSH] Promise ${index} failed:`, result.value);
+            }
+          });
         } else {
-          request.log.warn(`[PUSH] No push notifications to send`);
+          request.log.warn(`[PUSH] No push notifications to send - check member data and FCM tokens`);
         }
       } catch (error) {
         request.log.error(`[PUSH] ❌ Error in push notification process:`, error);
+        request.log.error(`[PUSH] Error stack:`, error.stack);
       }
     });
 

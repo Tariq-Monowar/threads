@@ -82,15 +82,20 @@ export const sendMessage = async (request, reply) => {
     const { conversationId, userId, text } = request.body;
     const prisma = request.server.prisma;
 
-    if (!conversationId || !userId) {
+
+    // validate request body
+    const requiredFields = ["conversationId", "userId"];
+    const missing = requiredFields.find(f => !request.body[f]);
+    if (missing) {
       return reply.status(400).send({
         success: false,
-        message: "conversationId and userId are required!",
+        message: `${missing} is required`,
       });
     }
-
+    
     const userIdInt = parseInt(userId);
-    const files = (request.files as any[]) || [];
+
+    const files = request.files;
 
     if ((!text || text.trim() === "") && files.length === 0) {
       return reply.status(400).send({
@@ -119,9 +124,7 @@ export const sendMessage = async (request, reply) => {
 
     // Block check for private conversations only
     if (!conversationCheck.isGroup) {
-      const otherMember = conversationCheck.members.find(
-        (m) => m.userId !== userIdInt
-      );
+      const otherMember = conversationCheck.members.find((m) => m.userId !== userIdInt);
       if (otherMember?.userId) {
         const isBlocked = await prisma.block.findFirst({
           where: {
@@ -206,48 +209,35 @@ export const sendMessage = async (request, reply) => {
       .map((m) => m.userId)
       .filter((id): id is number => typeof id === "number");
 
-    // Check which recipients are in conversation room
-    const usersInRoom = request.server.getUsersInConversationRoom
-      ? request.server.getUsersInConversationRoom(conversationId)
-      : [];
-    
-    const usersInRoomSet = new Set(
-      usersInRoom
-        .map((id) => {
-          const num = typeof id === "string" ? parseInt(id, 10) : Number(id);
-          return isNaN(num) ? null : num;
-        })
-        .filter((id): id is number => id !== null)
-    );
-    
-    // Find recipients who are in room (not sender)
-    const recipientsInRoom = transactionResult.members
-      .filter((member) => member.userId && member.userId !== userIdInt)
-      .filter((member) => {
-        if (!usersInRoomSet.has(member.userId!)) return false;
-        return request.server.isUserInConversationRoom
-          ? request.server.isUserInConversationRoom(member.userId!.toString(), conversationId)
-          : true;
-      });
-
+    // Check if any recipient (not sender) is in conversation room
     let messageForResponse = transactionResult.message;
     let wasMarkedAsRead = false;
     
-    // Mark as read/delivered if recipients are in room
-    if (recipientsInRoom.length > 0) {
-      try {
-        const updateResult = await prisma.message.update({
-          where: { id: transactionResult.message.id },
-          data: { isRead: true, isDelivered: true },
-          include: {
-            user: { select: { id: true, name: true, email: true, avatar: true } },
-            MessageFile: true,
-          },
-        });
-        messageForResponse = updateResult;
-        wasMarkedAsRead = true;
-      } catch (error) {
-        request.log.error(error);
+    if (request.server.getUsersInConversationRoom && request.server.isUserInConversationRoom) {
+      const usersInRoom = request.server.getUsersInConversationRoom(conversationId);
+      
+      // Check if any recipient is in room
+      const hasRecipientInRoom = transactionResult.members.some((member) => {
+        if (!member.userId || member.userId === userIdInt) return false;
+        return request.server.isUserInConversationRoom(member.userId.toString(), conversationId);
+      });
+
+      // Mark as read/delivered if any recipient is in room
+      if (hasRecipientInRoom) {
+        try {
+          const updateResult = await prisma.message.update({
+            where: { id: transactionResult.message.id },
+            data: { isRead: true, isDelivered: true },
+            include: {
+              user: { select: { id: true, name: true, email: true, avatar: true } },
+              MessageFile: true,
+            },
+          });
+          messageForResponse = updateResult;
+          wasMarkedAsRead = true;
+        } catch (error) {
+          request.log.error(error);
+        }
       }
     }
 

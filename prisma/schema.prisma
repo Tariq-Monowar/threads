@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -14,7 +14,7 @@ model User {
   password String?
   avatar   String?
   address  String?
-  fcmToken String[]
+  fcmToken Json @default("[]")
 
   // Relations
   messages      Message[]
@@ -47,7 +47,7 @@ model Conversation {
   avatar  String?
 
   // Array of admin IDs
-  adminIds Int[] @default([])
+  adminIds Json @default("[]")
 
   // Group permissions
   /// false => only admin can add
@@ -103,7 +103,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
   // Soft delete - ADD THIS
-  deletedForUsers Int[] @default([])
+  deletedForUsers Json @default("[]")
 
   // Read status - messages are read by default if user is in conversation room
   isRead Boolean @default(false)
@@ -156,7 +156,7 @@ model Call {
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   // For group calls, track who joined
-  participantIds Int[] @default([])
+  participantIds Json @default("[]")
 
   type   CallType
   status CallStatus @default(ONGOING)

@@ -142,7 +142,7 @@ export const createConversation = async (request, reply) => {
       const messages = await prisma.message.findMany({
         where: {
           conversationId,
-          NOT: { deletedForUsers: { has: currentUserId } },
+          NOT: { deletedForUsers: { array_contains: currentUserId } },
         },
         take: 50,
         orderBy: { createdAt: "asc" },
@@ -447,7 +447,7 @@ export const getConversationsByUserId = async (request, reply) => {
         },
         messages: {
           where: {
-            NOT: { deletedForUsers: { has: currentUserId } },
+            NOT: { deletedForUsers: { array_contains: currentUserId } },
           },
           orderBy: { createdAt: "desc" },
           take: message ? parseInt(message) : 50, // Parse to integer

@@ -52,7 +52,7 @@ const getGroupConversationWithDetails = async (
       messages: {
         where: currentUserId
           ? {
-              NOT: { deletedForUsers: { has: currentUserId } },
+              NOT: { deletedForUsers: { array_contains: currentUserId } },
             }
           : undefined,
         orderBy: { createdAt: "asc" },

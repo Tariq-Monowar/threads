@@ -181,7 +181,7 @@ export const getMyArchiveConversationsList = async (request, reply) => {
           conversationId: { in: conversationIds },
           userId: { not: currentUserId },
           isRead: false,
-          NOT: { deletedForUsers: { has: currentUserId } },
+          NOT: { deletedForUsers: { array_contains: currentUserId } },
         },
         _count: {
           id: true,
@@ -346,7 +346,7 @@ export const getMyArchiveConversationsList = async (request, reply) => {
           },
           messages: {
             where: {
-              NOT: { deletedForUsers: { has: currentUserId } },
+              NOT: { deletedForUsers: { array_contains: currentUserId } },
             },
             orderBy: { createdAt: "desc" },
             take: lastMessageLimit,

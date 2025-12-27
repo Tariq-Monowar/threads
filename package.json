@@ -18,6 +18,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset",
+    "migrate:postgres-to-mysql": "ts-node scripts/migrate-postgres-to-mysql-simple.ts",
     "dev:clean": "npm run docker:clean && npm run db:reset",
     "dev:setup": "npm run docker:up && powershell -command \"Start-Sleep -Seconds 10\" && npm run db:generate && npm run db:push",
     "dev:with-db": "npm run docker:up && powershell -command \"Start-Sleep -Seconds 10\" && npm run dev"
@@ -39,10 +40,12 @@
     "firebase-admin": "^13.5.0",
     "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.16.0",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.6",
     "nodemon": "^3.1.10",
     "otplib": "^12.0.1",
+    "pg": "^8.16.3",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
@@ -52,6 +55,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.3.1",
     "@types/nodemailer": "^7.0.1",
+    "@types/pg": "^8.16.0",
     "prisma": "^6.15.0",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",

@@ -1,4 +1,5 @@
 import { FileService } from "../../../utils/fileService";
+import { getJsonArray, jsonArrayAdd, jsonArrayRemove } from "../../../utils/jsonArray";
 
 export const registerUser = async (request, reply) => {
   try {
@@ -553,16 +554,17 @@ export const setFcmToken = async (request, reply) => {
         message: "User not found",
       });
     }
+
     await prisma.user.update({
       where: { id: currentUserId },
-      data: { fcmToken: [...user.fcmToken, fcmToken] },
+      data: { fcmToken: updatedTokens },
     });
 
     return reply.status(200).send({
       success: true,
       message: "FCM token set successfully",
       data: {
-        fcmToken: [...user.fcmToken, fcmToken],
+        fcmToken: updatedTokens,
       },
     });
 
@@ -611,7 +613,10 @@ export const removeFcmToken = async (request, reply) => {
       });
     }
 
-    if (!Array.isArray(user.fcmToken)) {
+    // Handle JSON array - ensure it's an array
+    const currentTokens = getJsonArray<string>(user.fcmToken);
+    
+    if (!Array.isArray(currentTokens)) {
       return reply.status(500).send({
         success: false,
         message: "FCM token list is corrupted",
@@ -619,7 +624,7 @@ export const removeFcmToken = async (request, reply) => {
     }
 
     // 2️⃣ Filter new tokens
-    const updatedTokens = user.fcmToken.filter((token) => token !== fcmToken);
+    const updatedTokens = jsonArrayRemove<string>(user.fcmToken, fcmToken);
 
     // 3️⃣ Update database
     const updatedUser = await prisma.user.update({

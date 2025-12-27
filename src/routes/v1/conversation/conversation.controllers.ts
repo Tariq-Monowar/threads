@@ -282,7 +282,7 @@ export const getMyConversationsList = async (request, reply) => {
           },
           messages: {
             where: {
-              NOT: { deletedForUsers: { has: currentUserId } },
+              NOT: { deletedForUsers: { array_contains: currentUserId } },
             },
             orderBy: { createdAt: "desc" },
             take: lastMessageLimit,

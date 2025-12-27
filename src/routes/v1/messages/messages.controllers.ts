@@ -16,6 +16,7 @@ import { authenticator } from "otplib";
 import { uploadsDir } from "../../../config/storage.config";
 import { FileService } from "../../../utils/fileService";
 import { transformMessage } from "../../../utils/message.utils";
+import { getJsonArray, jsonArrayContains, jsonArrayAdd } from "../../../utils/jsonArray";
 
 export const deleteMessage = async (request, reply) => {
   try {
@@ -341,10 +342,10 @@ export const sendMessage = async (request, reply) => {
             }
           }
 
-          const fcmTokens = member.user?.fcmToken || [];
+          const fcmTokens = getJsonArray<string>(member.user?.fcmToken, []);
           request.log.info(`[PUSH] Member ${member.userId} has ${fcmTokens.length} FCM token(s)`);
           
-          if (!Array.isArray(fcmTokens) || fcmTokens.length === 0) {
+          if (fcmTokens.length === 0) {
             request.log.warn(`[PUSH] No FCM tokens found for member ${member.userId}`);
             continue;
           }
@@ -388,7 +389,7 @@ export const sendMessage = async (request, reply) => {
                     prisma.user.update({
                       where: { id: member.userId },
                       data: {
-                        fcmToken: { set: validTokens.filter((t) => t !== token) },
+                        fcmToken: validTokens.filter((t) => t !== token),
                       },
                     }).catch((err) => {
                       request.log.error(`[PUSH] Failed to remove invalid token for user ${member.userId}: ${err.message}`);
@@ -501,10 +502,10 @@ export const deleteMessageForMe = async (request, reply) => {
       });
     }
 
-    if (
-      Array.isArray(message.deletedForUsers) &&
-      message.deletedForUsers.includes(myIdInt)
-    ) {
+    // Handle JSON array - ensure it's an array
+    const deletedUsers = getJsonArray<number>(message.deletedForUsers);
+    
+    if (jsonArrayContains(message.deletedForUsers, myIdInt)) {
       return reply.status(400).send({
         success: false,
         message: "Message already deleted for you",
@@ -514,7 +515,7 @@ export const deleteMessageForMe = async (request, reply) => {
     await prisma.message.update({
       where: { id: messageId },
       data: {
-        deletedForUsers: { push: myIdInt },
+        deletedForUsers: jsonArrayAdd<number>(message.deletedForUsers, myIdInt),
       },
     });
 
@@ -1054,22 +1055,27 @@ export const getMessages = async (request, reply) => {
       .map((p) => p.userId)
       .filter((id): id is number => typeof id === "number");
 
-    const rows = await prisma.message.findMany({
+    // Fetch messages - MySQL JSON doesn't support { has: ... } filter
+    // We'll fetch more and filter in code, then paginate
+    const allRows = await prisma.message.findMany({
       where: {
         conversationId,
-        NOT: { deletedForUsers: { has: myIdInt } },
       },
       include: {
         user: { select: { id: true, name: true, email: true, avatar: true } },
         MessageFile: true,
       },
       orderBy: { createdAt: "desc" },
-      skip: offset,
-      take: perPage + 1,
     });
 
-    const hasMore = rows.length > perPage;
-    const pageRows = hasMore ? rows.slice(0, perPage) : rows;
+    // Filter out messages deleted for this user (handle JSON array)
+    const rows = allRows.filter((message) => {
+      return !jsonArrayContains(message.deletedForUsers, myIdInt);
+    });
+
+    // Apply pagination after filtering
+    const hasMore = rows.length > offset + perPage;
+    const pageRows = rows.slice(offset, offset + perPage);
 
     const data = pageRows.map((m: any) => transformMessage(m, participantIds));
 

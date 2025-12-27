@@ -2,16 +2,35 @@ import fp from "fastify-plugin"
 import * as admin from "firebase-admin"
 
 function initFirebase(): boolean {
-  if (admin.apps.length) return true
+  if (admin.apps.length) {
+    console.log("[FIREBASE] Already initialized, apps count:", admin.apps.length)
+    return true
+  }
 
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT
   if (!serviceAccountJson) {
-    console.warn("FIREBASE_SERVICE_ACCOUNT env variable missing")
+    console.error("[FIREBASE] ❌ FIREBASE_SERVICE_ACCOUNT env variable is missing or empty")
+    console.error("[FIREBASE] Please set FIREBASE_SERVICE_ACCOUNT environment variable with your Firebase service account JSON")
     return false
   }
 
   try {
+    console.log("[FIREBASE] Attempting to initialize Firebase Admin SDK...")
     const credentials = JSON.parse(serviceAccountJson)
+
+    // Validate required fields
+    if (!credentials.project_id) {
+      console.error("[FIREBASE] ❌ Missing project_id in service account credentials")
+      return false
+    }
+    if (!credentials.private_key) {
+      console.error("[FIREBASE] ❌ Missing private_key in service account credentials")
+      return false
+    }
+    if (!credentials.client_email) {
+      console.error("[FIREBASE] ❌ Missing client_email in service account credentials")
+      return false
+    }
 
     // Fix escaped newlines in private key
     if (credentials.private_key) {
@@ -22,10 +41,17 @@ function initFirebase(): boolean {
       credential: admin.credential.cert(credentials),
     })
 
-    console.log("Firebase initialized")
+    console.log("[FIREBASE] ✅ Firebase Admin SDK initialized successfully")
+    console.log("[FIREBASE] Project ID:", credentials.project_id)
+    console.log("[FIREBASE] Client Email:", credentials.client_email)
     return true
-  } catch (err) {
-    console.error("Firebase initialization failed:", err)
+  } catch (err: any) {
+    console.error("[FIREBASE] ❌ Firebase initialization failed:")
+    console.error("[FIREBASE] Error message:", err?.message || err)
+    console.error("[FIREBASE] Error stack:", err?.stack)
+    if (err instanceof SyntaxError) {
+      console.error("[FIREBASE] The FIREBASE_SERVICE_ACCOUNT JSON is invalid. Please check the JSON format.")
+    }
     return false
   }
 }
@@ -34,16 +60,29 @@ export default fp(async (fastify) => {
   const isInitialized = initFirebase()
 
   if (isInitialized) {
-    fastify.log.info("Push notifications ready")
+    fastify.log.info("[FIREBASE] ✅ Push notifications ready")
+    console.log("[FIREBASE] ✅ Push notifications plugin loaded successfully")
   } else {
-    fastify.log.warn("Push notifications not configured: check FIREBASE_SERVICE_ACCOUNT")
+    fastify.log.error("[FIREBASE] ❌ Push notifications not configured: check FIREBASE_SERVICE_ACCOUNT")
+    console.error("[FIREBASE] ❌ Push notifications will not work until Firebase is properly configured")
   }
 
   fastify.decorate(
     "sendDataPush",
     async (token: string, data: Record<string, string>) => {
+      // Try to initialize if not already initialized
       if (!admin.apps.length) {
-        return { success: false, error: "Push notifications not configured" }
+        console.warn("[PUSH] Firebase not initialized, attempting to initialize now...")
+        const retryInit = initFirebase()
+        if (!retryInit) {
+          console.error("[PUSH] ❌ Firebase Admin SDK not initialized. admin.apps.length =", admin.apps.length)
+          console.error("[PUSH] Check server startup logs for Firebase initialization errors")
+          console.error("[PUSH] Verify FIREBASE_SERVICE_ACCOUNT environment variable is set correctly")
+          return { 
+            success: false, 
+            error: "Push notifications not configured - Firebase Admin SDK not initialized. Check FIREBASE_SERVICE_ACCOUNT environment variable." 
+          }
+        }
       }
 
       console.log("[PUSH] Sending notification to token:", token.substring(0, 20) + "...");

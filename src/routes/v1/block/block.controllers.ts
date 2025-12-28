@@ -1,118 +1,111 @@
 import { FileService } from "../../../utils/fileService";
 
-
 export const blockUser = async (request, reply) => {
-    const prisma = request.server.prisma;
-  
-    try {
-      const myId = Number(request.body.myId);
-      const otherId = Number(request.body.otherId);
-  
-      if (!myId || !otherId) {
-        return reply.status(400).send({
-          success: false,
-          message: "myId and otherId are required",
-        });
-      }
-  
-      if (myId === otherId) {
-        return reply.status(400).send({
-          success: false,
-          message: "You cannot block yourself",
-        });
-      }
+  const prisma = request.server.prisma;
 
-      // Check if both users exist
-      const users = await prisma.user.findMany({
-        where: {
-          id: { in: [myId, otherId] },
-        },
-        select: { id: true },
-      });
+  try {
+    const myId = Number(request.body.myId);
+    const otherId = Number(request.body.otherId);
 
-      if (users.length !== 2) {
-        return reply.status(404).send({
-          success: false,
-          message: "One or both users not found",
-        });
-      }
-
-      // Find conversation between the two users (if exists)
-      const conversation = await prisma.conversation.findFirst({
-        where: {
-          isGroup: false,
-          AND: [
-            { members: { some: { userId: myId, isDeleted: false } } },
-            { members: { some: { userId: otherId, isDeleted: false } } },
-          ],
-        },
-        select: {
-          id: true,
-        },
-      });
-  
-      // block create (unique constraint handles duplicate)
-      const block = await prisma.block.create({
-        data: {
-          blockerId: myId,
-          blockedId: otherId,
-        },
-        include: {
-          blocked: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatar: true,
-            },
-          },
-        },
-      });
-  
-      const data = {
-        conversationId: conversation?.id || null,
-        myId: block.blockerId,
-        otherId: block.blocked.id,
-        name: block.blocked.name,
-        email: block.blocked.email,
-        avatar: block.blocked.avatar
-          ? FileService.avatarUrl(block.blocked.avatar)
-          : null,
-        createdAt: block.createdAt,
-      };
-  
-      request.server.io.emit("blockUser", data);
-  
-      return reply.status(201).send({
-        success: true,
-        message: "User blocked",
-        data,
-      });
-    } catch (error) {
-      // already blocked (unique constraint)
-      if (error.code === "P2002") {
-        return reply.status(400).send({
-          success: false,
-          message: "User already blocked",
-        });
-      }
-
-      // foreign key constraint (user doesn't exist)
-      if (error.code === "P2003") {
-        return reply.status(404).send({
-          success: false,
-          message: "One or both users not found",
-        });
-      }
-  
-      request.log.error(error);
-      return reply.status(500).send({
+    if (!myId || !otherId) {
+      return reply.status(400).send({
         success: false,
-        message: "Something went wrong",
+        message: "myId and otherId are required",
       });
     }
-  };
-  
+
+    if (myId === otherId) {
+      return reply.status(400).send({
+        success: false,
+        message: "You cannot block yourself",
+      });
+    }
+
+    // Check if both users exist
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: [myId, otherId] },
+      },
+      select: { id: true },
+    });
+
+    const convercation = await prisma.convercation.findFirst({
+      whare: {
+        id: { in: [myId, otherId], isGroup: false },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (users.length !== 2) {
+      return reply.status(404).send({
+        success: false,
+        message: "One or both users not found",
+      });
+    }
+
+    // block create (unique constraint handles duplicate)
+    const block = await prisma.block.create({
+      data: {
+        blockerId: myId,
+        blockedId: otherId,
+      },
+      include: {
+        blocked: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    const data = {
+      convercationId: convercation.id,
+      myId: block.blockerId,
+      otherId: block.blocked.id,
+      name: block.blocked.name,
+      email: block.blocked.email,
+      avatar: block.blocked.avatar
+        ? FileService.avatarUrl(block.blocked.avatar)
+        : null,
+      createdAt: block.createdAt,
+    };
+
+    request.server.io.emit("blockUser", data);
+
+    return reply.status(201).send({
+      success: true,
+      message: "User blocked",
+      data,
+    });
+  } catch (error) {
+    // already blocked (unique constraint)
+    if (error.code === "P2002") {
+      return reply.status(400).send({
+        success: false,
+        message: "User already blocked",
+      });
+    }
+
+    // foreign key constraint (user doesn't exist)
+    if (error.code === "P2003") {
+      return reply.status(404).send({
+        success: false,
+        message: "One or both users not found",
+      });
+    }
+
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Something went wrong",
+    });
+  }
+};
 
 // Unblock a user
 export const unblockUser = async (request, reply) => {
@@ -164,23 +157,8 @@ export const unblockUser = async (request, reply) => {
       });
     }
 
-    // Find conversation between the two users (if exists)
-    const conversation = await prisma.conversation.findFirst({
-      where: {
-        isGroup: false,
-        AND: [
-          { members: { some: { userId: myIdInt, isDeleted: false } } },
-          { members: { some: { userId: otherIdInt, isDeleted: false } } },
-        ],
-      },
-      select: {
-        id: true,
-      },
-    });
-
     // Format block data before deleting
     const formattedBlock = {
-      conversationId: conversation?.id || null,
       myId: existingBlock.blockerId,
       otherId: existingBlock.blocked.id,
       name: existingBlock.blocked.name,
@@ -201,8 +179,8 @@ export const unblockUser = async (request, reply) => {
       },
     });
 
-    // Send socket event
-    request.server.io.emit("unblockUser", formattedBlock);
+    // Send socket event to the other user
+    request.server.io.emit("unblockUser", { formattedBlock });
 
     return reply.send({
       success: true,

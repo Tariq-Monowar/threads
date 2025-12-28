@@ -29,21 +29,26 @@ export const blockUser = async (request, reply) => {
       select: { id: true },
     });
 
-    const convercation = await prisma.convercation.findFirst({
-      whare: {
-        id: { in: [myId, otherId], isGroup: false },
-      },
-      select: {
-        id: true,
-      },
-    });
-
     if (users.length !== 2) {
       return reply.status(404).send({
         success: false,
         message: "One or both users not found",
       });
     }
+
+    // Find private conversation between these two users (if exists)
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: myId, isDeleted: false } } },
+          { members: { some: { userId: otherId, isDeleted: false } } },
+        ],
+      },
+      select: {
+        id: true,
+      },
+    });
 
     // block create (unique constraint handles duplicate)
     const block = await prisma.block.create({
@@ -64,7 +69,7 @@ export const blockUser = async (request, reply) => {
     });
 
     const data = {
-      convercationId: convercation.id,
+      conversationId: conversation?.id || null,
       myId: block.blockerId,
       otherId: block.blocked.id,
       name: block.blocked.name,

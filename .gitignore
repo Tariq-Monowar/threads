@@ -1,7 +1,7 @@
 node_modules
 
 .env
-
+txt.txt
 /generated/prisma
 prisma/migrations
 dist

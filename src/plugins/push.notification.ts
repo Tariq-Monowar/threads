@@ -182,6 +182,7 @@ export default fp(async (fastify) => {
       } catch (error: any) {
         // Handle specific Firebase errors
         const errorCode = error?.code || error?.errorInfo?.code
+        const errorMessage = error?.message || error?.errorInfo?.message || "Unknown error"
         
         // Invalid token errors - don't log as error, just return failure
         if (
@@ -198,11 +199,29 @@ export default fp(async (fastify) => {
           }
         }
         
+        // Permission/credential errors
+        if (
+          errorCode === "messaging/mismatched-credential" ||
+          errorMessage.includes("Permission") ||
+          errorMessage.includes("denied")
+        ) {
+          console.error("[PUSH] ❌ Permission error - Service account lacks FCM permissions")
+          console.error("[PUSH] Error details:", errorMessage)
+          console.error("[PUSH] Fix: Grant 'Firebase Cloud Messaging API Service Agent' role to service account")
+          return { 
+            success: false, 
+            error: "Service account lacks permission to send push notifications. Grant 'Firebase Cloud Messaging API Service Agent' role.",
+            code: errorCode
+          }
+        }
+        
         // Other errors - log but don't throw
-        console.error("Push error:", error)
+        console.error("[PUSH] Push error:", error)
+        console.error("[PUSH] Error code:", errorCode)
+        console.error("[PUSH] Error message:", errorMessage)
         return { 
           success: false, 
-          error: error?.message || "Failed to send push notification",
+          error: errorMessage,
           code: errorCode
         }
       }

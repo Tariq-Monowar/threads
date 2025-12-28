@@ -676,3 +676,27 @@ export const removeAllFcm = async (request, reply) => {
     });
   }
 };
+
+export const sendNotification = async (request, reply) => {
+  try {
+    const { fcmToken } = request.body;
+    const { title, body, data } = request.body;
+    const { myId } = request.params;
+    
+    const currentUserId = Number(myId);
+    if (isNaN(currentUserId)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid user ID",
+      });
+    }
+  
+    
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({
+      success: false,
+      message: "Failed to send notification",
+    });
+  }
+};

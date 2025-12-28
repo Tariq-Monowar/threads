@@ -416,14 +416,14 @@ export default fp(async (fastify) => {
 
         // Send push only to receiver (via FCM tokens)
         if (receiverFcmTokens.length > 0) {
-          const pushData = {
-            type: "call_initiate", // Changed from "november_is_comming" to meaningful type
-            callerId,
-            callType,
-            callerInfo: {
+          const pushData: Record<string, string> = {
+            type: "call_initiate",
+            callerId: String(callerId),
+            callType: String(callType),
+            callerInfo: JSON.stringify({
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo.avatar || ""),
-            },
+            }),
           };
 
           const pushPromises: Promise<any>[] = [];
@@ -846,8 +846,8 @@ export default fp(async (fastify) => {
 
                 const pushData: Record<string, string> = {
                   type: "call_ended",
-                  endedBy: endedByUserId,
-                  callType: callType,
+                  endedBy: String(endedByUserId),
+                  callType: String(callType),
                   reason: wasAccepted ? "completed" : "canceled",
                 };
 

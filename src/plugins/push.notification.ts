@@ -51,19 +51,33 @@ export default fp(async (fastify) => {
       console.log("================================================", data);
 
       try {
+        // Ensure all data values are strings (FCM requirement)
+        const fcmData: Record<string, string> = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (key === "data") {
+            // Handle nested data object
+            fcmData.data =
+              typeof value === "string"
+                ? value
+                : JSON.stringify(value || {});
+          } else {
+            // Convert all other values to strings
+            fcmData[key] = String(value || "");
+          }
+        }
+
+        // Ensure type is always included and is a string
+        if (!fcmData.type) {
+          fcmData.type = "notification";
+        }
+
         const messageId = await admin.messaging().send({
           token,
           notification: {
             title: data.title || "New Message",
             body: data.body || "You have a new message!",
           },
-          data: {
-            ...data,
-            data:
-              typeof data.data === "string"
-                ? data.data
-                : JSON.stringify(data.data || {}),
-          },
+          data: fcmData,
           android: {
             priority: "high",
             notification: {

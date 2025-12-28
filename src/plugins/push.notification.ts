@@ -32,9 +32,36 @@ function initFirebase(): boolean {
       return false
     }
 
-    // Fix escaped newlines in private key
+    // Fix escaped newlines in private key - handle both \\n and \n
     if (credentials.private_key) {
-      credentials.private_key = credentials.private_key.replace(/\\n/g, "\n")
+      // First, check if it's already a string with literal \n
+      let privateKey = credentials.private_key;
+      
+      // Replace escaped newlines (\\n) with actual newlines
+      if (privateKey.includes('\\n')) {
+        privateKey = privateKey.replace(/\\n/g, "\n");
+      }
+      
+      // Validate private key format
+      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        console.error("[FIREBASE] ❌ Private key format is invalid - missing BEGIN marker")
+        return false
+      }
+      if (!privateKey.includes('-----END PRIVATE KEY-----')) {
+        console.error("[FIREBASE] ❌ Private key format is invalid - missing END marker")
+        return false
+      }
+      
+      credentials.private_key = privateKey;
+      console.log("[FIREBASE] Private key parsed successfully, length:", privateKey.length);
+    }
+
+    // Verify private key format before initialization
+    const privateKeyLines = credentials.private_key.split('\n');
+    if (privateKeyLines.length < 3) {
+      console.error("[FIREBASE] ❌ Private key appears to be corrupted - too few lines")
+      console.error("[FIREBASE] Expected format: -----BEGIN PRIVATE KEY-----\\n...key data...\\n-----END PRIVATE KEY-----")
+      return false
     }
 
     admin.initializeApp({
@@ -44,6 +71,7 @@ function initFirebase(): boolean {
     console.log("[FIREBASE] ✅ Firebase Admin SDK initialized successfully")
     console.log("[FIREBASE] Project ID:", credentials.project_id)
     console.log("[FIREBASE] Client Email:", credentials.client_email)
+    console.log("[FIREBASE] Private Key ID:", credentials.private_key_id)
     return true
   } catch (err: any) {
     console.error("[FIREBASE] ❌ Firebase initialization failed:")
@@ -199,9 +227,30 @@ export default fp(async (fastify) => {
           }
         }
         
-        // Permission/credential errors
+        // Invalid credential errors
         if (
+          errorCode === "app/invalid-credential" ||
           errorCode === "messaging/mismatched-credential" ||
+          errorMessage.includes("Invalid JWT Signature") ||
+          errorMessage.includes("invalid_grant")
+        ) {
+          console.error("[PUSH] ❌ Invalid credential error")
+          console.error("[PUSH] Error details:", errorMessage)
+          console.error("[PUSH] Possible causes:")
+          console.error("[PUSH]   1. Server time is not synced - run: sudo ntpdate -s time.nist.gov")
+          console.error("[PUSH]   2. Private key is corrupted or revoked")
+          console.error("[PUSH]   3. Service account key has been deleted")
+          console.error("[PUSH] Fix: Check server time sync and verify key at:")
+          console.error("[PUSH]   https://console.firebase.google.com/iam-admin/serviceaccounts/project")
+          return { 
+            success: false, 
+            error: "Invalid Firebase credentials. Check server time sync and verify service account key.",
+            code: errorCode
+          }
+        }
+        
+        // Permission errors
+        if (
           errorMessage.includes("Permission") ||
           errorMessage.includes("denied")
         ) {

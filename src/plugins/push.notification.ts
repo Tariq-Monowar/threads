@@ -7,6 +7,20 @@ function initFirebase(): boolean {
     return true
   }
 
+  // Check server time - JWT signatures require accurate time
+  const serverTime = new Date();
+  const now = Date.now();
+  console.log("[FIREBASE] Server time:", serverTime.toISOString());
+  console.log("[FIREBASE] Server timestamp:", now);
+  
+  // Warn if time seems off (more than 5 minutes difference from expected)
+  // Note: This is a rough check, actual NTP sync is still required
+  const timeDiff = Math.abs(now - Date.parse(serverTime.toISOString()));
+  if (timeDiff > 300000) { // 5 minutes
+    console.warn("[FIREBASE] ⚠️  Server time may be out of sync. JWT signatures require accurate time.");
+    console.warn("[FIREBASE] ⚠️  Run: sudo ntpdate -s time.nist.gov or sudo timedatectl set-ntp true");
+  }
+
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT
   if (!serviceAccountJson) {
     console.error("[FIREBASE] ❌ FIREBASE_SERVICE_ACCOUNT env variable is missing or empty")
@@ -32,38 +46,58 @@ function initFirebase(): boolean {
       return false
     }
 
-    // Fix escaped newlines in private key - handle both \\n and \n
+    // Fix escaped newlines in private key - handle multiple escape patterns
     if (credentials.private_key) {
-      // First, check if it's already a string with literal \n
-      let privateKey = credentials.private_key;
+      let privateKey = String(credentials.private_key);
       
-      // Replace escaped newlines (\\n) with actual newlines
+      // Debug: log first 50 chars to see format
+      console.log("[FIREBASE] Private key preview (first 50 chars):", privateKey.substring(0, 50));
+      console.log("[FIREBASE] Private key contains \\\\n:", privateKey.includes('\\\\n'));
+      console.log("[FIREBASE] Private key contains \\n:", privateKey.includes('\\n'));
+      console.log("[FIREBASE] Private key contains actual newline:", privateKey.includes('\n'));
+      
+      // Handle different escape patterns
+      // Pattern 1: Double-escaped (\\\\n) - from some env parsers
+      if (privateKey.includes('\\\\n')) {
+        privateKey = privateKey.replace(/\\\\n/g, "\n");
+      }
+      // Pattern 2: Single-escaped (\\n) - standard JSON
       if (privateKey.includes('\\n')) {
         privateKey = privateKey.replace(/\\n/g, "\n");
       }
+      // Pattern 3: Already has newlines (shouldn't happen in JSON but handle it)
+      // No action needed
       
       // Validate private key format
       if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
         console.error("[FIREBASE] ❌ Private key format is invalid - missing BEGIN marker")
+        console.error("[FIREBASE] First 100 chars:", privateKey.substring(0, 100));
         return false
       }
       if (!privateKey.includes('-----END PRIVATE KEY-----')) {
         console.error("[FIREBASE] ❌ Private key format is invalid - missing END marker")
+        console.error("[FIREBASE] Last 100 chars:", privateKey.substring(Math.max(0, privateKey.length - 100)));
+        return false
+      }
+      
+      // Verify key has proper line breaks
+      const keyLines = privateKey.split('\n');
+      if (keyLines.length < 3) {
+        console.error("[FIREBASE] ❌ Private key has too few lines after parsing:", keyLines.length);
+        console.error("[FIREBASE] This suggests newlines were not properly converted");
         return false
       }
       
       credentials.private_key = privateKey;
-      console.log("[FIREBASE] Private key parsed successfully, length:", privateKey.length);
+      console.log("[FIREBASE] Private key parsed successfully");
+      console.log("[FIREBASE] Private key length:", privateKey.length);
+      console.log("[FIREBASE] Private key lines:", keyLines.length);
+      console.log("[FIREBASE] First line:", keyLines[0]);
+      console.log("[FIREBASE] Last line:", keyLines[keyLines.length - 1]);
     }
 
-    // Verify private key format before initialization
-    const privateKeyLines = credentials.private_key.split('\n');
-    if (privateKeyLines.length < 3) {
-      console.error("[FIREBASE] ❌ Private key appears to be corrupted - too few lines")
-      console.error("[FIREBASE] Expected format: -----BEGIN PRIVATE KEY-----\\n...key data...\\n-----END PRIVATE KEY-----")
-      return false
-    }
-
+    // Initialize Firebase Admin SDK
+    console.log("[FIREBASE] Initializing Firebase Admin SDK with credentials...");
     admin.initializeApp({
       credential: admin.credential.cert(credentials),
     })

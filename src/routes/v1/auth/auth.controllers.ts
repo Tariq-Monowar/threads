@@ -679,24 +679,125 @@ export const removeAllFcm = async (request, reply) => {
 
 export const sendNotification = async (request, reply) => {
   try {
-    const { fcmToken } = request.body;
-    const { title, body, data } = request.body;
+    const { fcmToken, title, body, data, userId } = request.body;
     const { myId } = request.params;
     
-    const currentUserId = Number(myId);
-    if (isNaN(currentUserId)) {
+    // Validate required fields
+    if (!title || !body) {
       return reply.status(400).send({
         success: false,
-        message: "Invalid user ID",
+        message: "title and body are required",
       });
     }
-  
-    
+
+    const prisma = request.server.prisma;
+    let tokensToSend: string[] = [];
+
+    // Option 1: Send to specific FCM token (if provided)
+    if (fcmToken) {
+      if (typeof fcmToken === 'string') {
+        tokensToSend = [fcmToken];
+      } else if (Array.isArray(fcmToken)) {
+        tokensToSend = fcmToken.filter((token): token is string => typeof token === 'string' && token.trim().length > 0);
+      } else {
+        return reply.status(400).send({
+          success: false,
+          message: "fcmToken must be a string or array of strings",
+        });
+      }
+    }
+    // Option 2: Send to user by ID (from params or body)
+    else if (myId || userId) {
+      const targetUserId = Number(myId || userId);
+      if (isNaN(targetUserId)) {
+        return reply.status(400).send({
+          success: false,
+          message: "Invalid user ID",
+        });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { id: true, fcmToken: true },
+      });
+
+      if (!user) {
+        return reply.status(404).send({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      const userTokens = getJsonArray<string>(user.fcmToken, []);
+      tokensToSend = userTokens.filter((token): token is string => typeof token === 'string' && token.trim().length > 0);
+
+      if (tokensToSend.length === 0) {
+        return reply.status(400).send({
+          success: false,
+          message: "User has no FCM tokens registered",
+        });
+      }
+    }
+    // No valid target specified
+    else {
+      return reply.status(400).send({
+        success: false,
+        message: "Either fcmToken or userId/myId is required",
+      });
+    }
+
+    // Check if sendDataPush is available
+    if (!request.server.sendDataPush) {
+      return reply.status(503).send({
+        success: false,
+        message: "Push notifications not configured",
+      });
+    }
+
+    // Prepare push data - all values must be strings
+    const pushData: Record<string, string> = {
+      type: "custom_notification",
+      title: String(title),
+      body: String(body),
+      ...(data ? { data: typeof data === 'string' ? data : JSON.stringify(data) } : {}),
+    };
+
+    // Send notifications to all tokens
+    const results = await Promise.allSettled(
+      tokensToSend.map(async (token) => {
+        const result = await request.server.sendDataPush(token, pushData);
+        return { token, ...result };
+      })
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+    const failed = results.length - successful;
+
+    // Collect results
+    const notificationResults = results.map((result) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+      return { success: false, error: result.reason?.message || "Unknown error" };
+    });
+
+    return reply.status(200).send({
+      success: true,
+      message: `Notification sent to ${successful} of ${tokensToSend.length} token(s)`,
+      data: {
+        total: tokensToSend.length,
+        successful,
+        failed,
+        results: notificationResults,
+      },
+    });
+
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({
       success: false,
       message: "Failed to send notification",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

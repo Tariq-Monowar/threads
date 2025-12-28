@@ -10,7 +10,8 @@ import {
   setFcmToken,
   removeFcmToken,
   removeAllFcm,
-  sendNotification
+  testFCMToken,
+  testFirebase
 } from "./auth.controllers";
 import { upload } from "../../../config/storage.config";
 import { verifyUser } from "../../../middleware/auth.middleware";
@@ -28,7 +29,8 @@ const authRoutes = (fastify: FastifyInstance) => {
   fastify.post("/remove-fcm-token/:myId", removeFcmToken);
 
   fastify.post("/remove", removeAllFcm);
-  fastify.post("/send-notification/:myId?", sendNotification);
+  fastify.post("/send-notification/:myId?", testFCMToken);
+  fastify.post("/test-firebase", testFirebase);
 };
 
 export default authRoutes;

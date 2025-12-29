@@ -80,7 +80,8 @@ export const blockUser = async (request, reply) => {
       createdAt: block.createdAt,
     };
 
-    request.server.io.emit("blockUser", data);
+    // request.server.io.emit("blockUser", data);
+    request.server.io.to(otherId.toString()).emit("blockUser", data);
 
     return reply.status(201).send({
       success: true,
@@ -185,7 +186,7 @@ export const unblockUser = async (request, reply) => {
     });
 
     // Send socket event to the other user
-    request.server.io.emit("unblockUser", { formattedBlock });
+    request.server.io.to(otherId.toString()).emit("unblockUser", formattedBlock);
 
     return reply.send({
       success: true,

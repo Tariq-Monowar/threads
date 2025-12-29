@@ -273,13 +273,11 @@ export const searchUsers = async (request, reply) => {
         {
           name: {
             contains: search,
-            mode: "insensitive",
           },
         },
         {
           email: {
             contains: search,
-            mode: "insensitive",
           },
         },
       ];

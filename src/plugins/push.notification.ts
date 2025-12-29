@@ -51,17 +51,14 @@ export default fp(async (fastify) => {
       console.log("================================================", data);
 
       try {
-        // Ensure all data values are strings (FCM requirement)
         const fcmData: Record<string, string> = {};
         for (const [key, value] of Object.entries(data)) {
           if (key === "data") {
-            // Handle nested data object
             fcmData.data =
               typeof value === "string"
                 ? value
                 : JSON.stringify(value || {});
           } else {
-            // Convert all other values to strings
             fcmData[key] = String(value || "");
           }
         }
@@ -82,8 +79,8 @@ export default fp(async (fastify) => {
             priority: "high",
             notification: {
               sound: "default",
-              channelId: "high_importance_channel", // MUST exist in Android app
-              tag: `msg_${data.conversationId || "general"}`, // ✅ valid here
+              channelId: "high_importance_channel",
+              tag: `msg_${data.conversationId || "general"}`,
             },
           },
           apns: {

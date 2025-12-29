@@ -331,11 +331,15 @@ export default fp(async (fastify) => {
         if (receiverFcmTokens.length > 0) {
           const pushData: Record<string, string> = {
             type: "call_initiate",
-            callerId: String(callerId),
-            callType: String(callType),
-            callerInfo: JSON.stringify({
-              ...callerInfo,
-              avatar: FileService.avatarUrl(callerInfo.avatar || ""),
+            success: "true",
+            message: "Incoming call",
+            data: JSON.stringify({
+              callerId: String(callerId),
+              callType: String(callType),
+              callerInfo: {
+                ...callerInfo,
+                avatar: FileService.avatarUrl(callerInfo.avatar || ""),
+              },
             }),
           };
 
@@ -809,7 +813,7 @@ export default fp(async (fastify) => {
               if (opponentFcmTokens.length > 0) {
                 const endedByUserInfo = endedByUserData
                   ? {
-                      id: endedByUserData.id.toString(),
+                      id: endedByUserData.id,
                       name: endedByUserData.name || `User ${endedByUserId}`,
                       avatar: FileService.avatarUrl(
                         endedByUserData.avatar || ""
@@ -819,14 +823,17 @@ export default fp(async (fastify) => {
 
                 const pushData: Record<string, string> = {
                   type: "call_ended",
-                  endedBy: String(endedByUserId),
-                  callType: String(callType),
-                  reason: wasAccepted ? "completed" : "canceled",
+                  success: "true",
+                  message: wasAccepted ? "guman meya" : "time lost guman meya",
+                  data: JSON.stringify({
+                    callerId: String(callerId),
+                    receiverId: String(receiverId),
+                    callType: String(callType),
+                    endedBy: String(endedByUserId),
+                    reason: wasAccepted ? "completed" : "canceled",
+                    ...(endedByUserInfo ? { endedByUserInfo: endedByUserInfo } : {}),
+                  }),
                 };
-
-                if (endedByUserInfo) {
-                  pushData.endedByUser = JSON.stringify(endedByUserInfo);
-                }
 
                 const pushPromises: Promise<any>[] = [];
                 const validTokens = opponentFcmTokens.filter(

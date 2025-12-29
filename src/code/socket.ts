@@ -6,6 +6,7 @@ import { FileService } from "../utils/fileService";
 import { createOnlineUsersStore } from "../utils/onlineUsers";
 import { createConversationRoomsStore } from "../utils/conversationRooms";
 import { createCallState, CallType, CallData } from "../utils/callState";
+import { getJsonArray } from "../utils/jsonArray";
 const prisma = new PrismaClient();
 
 export default fp(async (fastify) => {
@@ -324,27 +325,24 @@ export default fp(async (fastify) => {
           avatar: callerAvatar || null,
         };
 
-        const receiverFcmTokens = receiverData?.fcmToken || [];
+        const receiverFcmTokens = getJsonArray<string>(receiverData?.fcmToken, []);
 
         // Send push only to receiver (via FCM tokens)
         if (receiverFcmTokens.length > 0) {
-          const pushData = {
-            type: "call_initiate", // Changed from "november_is_comming" to meaningful type
-            callerId,
-            callType,
-            callerInfo: {
+          const pushData: Record<string, string> = {
+            type: "call_initiate",
+            callerId: String(callerId),
+            callType: String(callType),
+            callerInfo: JSON.stringify({
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo.avatar || ""),
-            },
+            }),
           };
 
           const pushPromises: Promise<any>[] = [];
 
           // Use receiverFcmTokens instead of member.user?.fcmToken
-          if (
-            Array.isArray(receiverFcmTokens) &&
-            receiverFcmTokens.length > 0
-          ) {
+          if (receiverFcmTokens.length > 0) {
             const validTokens = receiverFcmTokens.filter(
               (token): token is string => Boolean(token)
             );
@@ -807,11 +805,8 @@ export default fp(async (fastify) => {
                 (u) => u.id === Number(endedByUserId)
               );
 
-              if (
-                opponentData &&
-                opponentData.fcmToken &&
-                opponentData.fcmToken.length > 0
-              ) {
+              const opponentFcmTokens = getJsonArray<string>(opponentData?.fcmToken, []);
+              if (opponentFcmTokens.length > 0) {
                 const endedByUserInfo = endedByUserData
                   ? {
                       id: endedByUserData.id.toString(),
@@ -824,8 +819,8 @@ export default fp(async (fastify) => {
 
                 const pushData: Record<string, string> = {
                   type: "call_ended",
-                  endedBy: endedByUserId,
-                  callType: callType,
+                  endedBy: String(endedByUserId),
+                  callType: String(callType),
                   reason: wasAccepted ? "completed" : "canceled",
                 };
 
@@ -834,7 +829,7 @@ export default fp(async (fastify) => {
                 }
 
                 const pushPromises: Promise<any>[] = [];
-                const validTokens = opponentData.fcmToken.filter(
+                const validTokens = opponentFcmTokens.filter(
                   (token): token is string => Boolean(token)
                 );
 

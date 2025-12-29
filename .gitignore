@@ -1,11 +1,11 @@
 node_modules
 
-.env
 txt.txt
 /generated/prisma
 prisma/migrations
 dist
 __practice__
+temp_auto_push.bat
 __test__
 __TEST__
 SOCKET_API_INTEGRATION_COMPLETE.md
@@ -13,3 +13,6 @@ SOCKET_IMPLEMENTATION_GUIDE.md
 SOCKET_FIXES_SUMMARY.md
 uploads
 call-demo.html
+config.bat
+.gitignore
+branch_structure.json

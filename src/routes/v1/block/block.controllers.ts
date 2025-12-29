@@ -163,8 +163,22 @@ export const unblockUser = async (request, reply) => {
       });
     }
 
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: myId, isDeleted: false } } },
+          { members: { some: { userId: otherId, isDeleted: false } } },
+        ],
+      },
+      select: {
+        id: true,
+      },
+    });
+
     // Format block data before deleting
     const formattedBlock = {
+      conversationId: conversation?.id || null,
       myId: existingBlock.blockerId,
       otherId: existingBlock.blocked.id,
       name: existingBlock.blocked.name,
@@ -186,7 +200,9 @@ export const unblockUser = async (request, reply) => {
     });
 
     // Send socket event to the other user
-    request.server.io.to(otherId.toString()).emit("unblockUser", formattedBlock);
+    request.server.io
+      .to(otherId.toString())
+      .emit("unblockUser", formattedBlock);
 
     return reply.send({
       success: true,

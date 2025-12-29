@@ -824,7 +824,7 @@ export default fp(async (fastify) => {
                 const pushData: Record<string, string> = {
                   type: "call_ended",
                   success: "true",
-                  message: wasAccepted ? "guman meya" : "time lost guman meya",
+                  message: wasAccepted ? "Call completed" : "Call canceled",
                   data: JSON.stringify({
                     callerId: String(callerId),
                     receiverId: String(receiverId),

@@ -1085,6 +1085,7 @@ export default fp(async (fastify) => {
       }
 
       if (activeCalls.has(userId)) {
+        
         const call = activeCalls.get(userId)!;
         const peerId = call.with;
         activeCalls.delete(userId);

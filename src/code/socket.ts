@@ -6,7 +6,6 @@ import { FileService } from "../utils/fileService";
 import { createOnlineUsersStore } from "../utils/onlineUsers";
 import { createConversationRoomsStore } from "../utils/conversationRooms";
 import { createCallState, CallType, CallData } from "../utils/callState";
-import { getJsonArray } from "../utils/jsonArray";
 const prisma = new PrismaClient();
 
 export default fp(async (fastify) => {
@@ -325,7 +324,7 @@ export default fp(async (fastify) => {
           avatar: callerAvatar || null,
         };
 
-        const receiverFcmTokens = getJsonArray<string>(receiverData?.fcmToken, []);
+        const receiverFcmTokens = receiverData?.fcmToken || [];
 
         // Send push only to receiver (via FCM tokens)
         if (receiverFcmTokens.length > 0) {
@@ -342,7 +341,10 @@ export default fp(async (fastify) => {
           const pushPromises: Promise<any>[] = [];
 
           // Use receiverFcmTokens instead of member.user?.fcmToken
-          if (receiverFcmTokens.length > 0) {
+          if (
+            Array.isArray(receiverFcmTokens) &&
+            receiverFcmTokens.length > 0
+          ) {
             const validTokens = receiverFcmTokens.filter(
               (token): token is string => Boolean(token)
             );
@@ -582,21 +584,34 @@ export default fp(async (fastify) => {
           return;
         }
 
+        // CRITICAL FIX: Check if receiver has set remote description
+        // If both have set remote descriptions, send immediately
+        // Otherwise, buffer candidates (they'll be flushed when remote description is set)
+        const isTURNRelay = candidate.candidate?.includes("typ relay") ?? false;
+        
         // If call is already in "in_call" status, it means SDP exchange is complete
         // So we can send the candidate immediately without buffering
         if (
           senderCall.status === "in_call" &&
           receiverCall.status === "in_call"
         ) {
+          // Both sides have completed SDP exchange - send immediately
           io.to(receiverId).emit("webrtc_ice", { senderId, candidate });
         } else {
-          // Buffer ICE candidate instead of sending immediately
-          // This prevents race condition where candidates arrive before remote description
+          // Buffer ICE candidate - will be flushed when receiver sets remote description
+          // CRITICAL: Always buffer during "calling" phase to ensure proper timing
           const buffer = getIceCandidateBuffer(receiverId, senderId);
           buffer.push({
             candidate,
             timestamp: Date.now(),
           });
+          
+          // Log TURN relay candidates for debugging
+          if (isTURNRelay) {
+            console.log(
+              `[ICE] Buffered TURN relay candidate from ${senderId} to ${receiverId}`
+            );
+          }
         }
       }
     );
@@ -606,23 +621,70 @@ export default fp(async (fastify) => {
       const userId = getUserId();
       if (!userId || !peerId) return;
 
-      const bufferKey = `${userId}-${peerId}`;
-      const bufferedCandidates = iceCandidateBuffers.get(bufferKey);
+      // CRITICAL FIX: Check both directions for buffered candidates
+      // Candidates can be buffered in either direction depending on who sent them first
+      const bufferKey1 = `${userId}-${peerId}`; // Candidates from userId to peerId
+      const bufferKey2 = `${peerId}-${userId}`; // Candidates from peerId to userId
+      
+      const bufferedCandidates1 = iceCandidateBuffers.get(bufferKey1);
+      const bufferedCandidates2 = iceCandidateBuffers.get(bufferKey2);
 
-      if (bufferedCandidates && bufferedCandidates.length > 0) {
-        // Send all buffered candidates to the peer
-        const peerSockets = getSocketsForUser(peerId);
-        if (peerSockets && peerSockets.size > 0) {
-          bufferedCandidates.forEach((item) => {
+      const peerSockets = getSocketsForUser(peerId);
+      if (peerSockets && peerSockets.size > 0) {
+        // Send candidates from userId to peerId (caller's candidates to receiver)
+        if (bufferedCandidates1 && bufferedCandidates1.length > 0) {
+          // Prioritize TURN relay candidates
+          const relayCandidates = bufferedCandidates1.filter((item) =>
+            item.candidate?.candidate?.includes("typ relay")
+          );
+          const otherCandidates = bufferedCandidates1.filter(
+            (item) => !item.candidate?.candidate?.includes("typ relay")
+          );
+
+          // Send TURN relay candidates first (critical for cross-network)
+          relayCandidates.forEach((item) => {
             io.to(peerId).emit("webrtc_ice", {
               senderId: userId,
               candidate: item.candidate,
             });
           });
+
+          // Then send other candidates
+          otherCandidates.forEach((item) => {
+            io.to(peerId).emit("webrtc_ice", {
+              senderId: userId,
+              candidate: item.candidate,
+            });
+          });
+
+          iceCandidateBuffers.delete(bufferKey1);
         }
 
-        // Clear the buffer
-        iceCandidateBuffers.delete(bufferKey);
+        // Send candidates from peerId to userId (receiver's candidates to caller)
+        if (bufferedCandidates2 && bufferedCandidates2.length > 0) {
+          const relayCandidates = bufferedCandidates2.filter((item) =>
+            item.candidate?.candidate?.includes("typ relay")
+          );
+          const otherCandidates = bufferedCandidates2.filter(
+            (item) => !item.candidate?.candidate?.includes("typ relay")
+          );
+
+          relayCandidates.forEach((item) => {
+            io.to(userId).emit("webrtc_ice", {
+              senderId: peerId,
+              candidate: item.candidate,
+            });
+          });
+
+          otherCandidates.forEach((item) => {
+            io.to(userId).emit("webrtc_ice", {
+              senderId: peerId,
+              candidate: item.candidate,
+            });
+          });
+
+          iceCandidateBuffers.delete(bufferKey2);
+        }
       }
     });
 
@@ -745,8 +807,11 @@ export default fp(async (fastify) => {
                 (u) => u.id === Number(endedByUserId)
               );
 
-              const opponentFcmTokens = getJsonArray<string>(opponentData?.fcmToken, []);
-              if (opponentFcmTokens.length > 0) {
+              if (
+                opponentData &&
+                opponentData.fcmToken &&
+                opponentData.fcmToken.length > 0
+              ) {
                 const endedByUserInfo = endedByUserData
                   ? {
                       id: endedByUserData.id.toString(),
@@ -769,7 +834,7 @@ export default fp(async (fastify) => {
                 }
 
                 const pushPromises: Promise<any>[] = [];
-                const validTokens = opponentFcmTokens.filter(
+                const validTokens = opponentData.fcmToken.filter(
                   (token): token is string => Boolean(token)
                 );
 

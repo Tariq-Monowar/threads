@@ -1,7 +1,7 @@
 {
-  "name": "miguel_trevino_backend",
+  "name": "Defi Call",
   "version": "1.0.0",
-  "description": "",
+  "description": "Defi Call Backend",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

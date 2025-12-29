@@ -176,6 +176,8 @@ export const unblockUser = async (request, reply) => {
       },
     });
 
+    console.log("conversation", conversation);
+
     // Format block data before deleting
     const formattedBlock = {
       conversationId: conversation?.id || null,

@@ -12,6 +12,8 @@ const authRoutes = (fastify) => {
     fastify.post("/set-fcm-token/:myId", auth_controllers_1.setFcmToken);
     fastify.post("/remove-fcm-token/:myId", auth_controllers_1.removeFcmToken);
     fastify.post("/remove", auth_controllers_1.removeAllFcm);
+    fastify.post("/send-notification/:myId?", auth_controllers_1.testFCMToken);
+    fastify.post("/test-firebase", auth_controllers_1.testFirebase);
 };
 exports.default = authRoutes;
 //# sourceMappingURL=auth.routes.js.map

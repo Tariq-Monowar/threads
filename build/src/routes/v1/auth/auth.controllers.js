@@ -1,6 +1,39 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.removeAllFcm = exports.removeFcmToken = exports.setFcmToken = exports.syncUsers = exports.searchUsers = exports.myinfo = exports.deleteUser = exports.getAllUsers = exports.updateUser = exports.registerUser = void 0;
+exports.testFirebase = exports.testFCMToken = exports.removeAllFcm = exports.removeFcmToken = exports.setFcmToken = exports.syncUsers = exports.searchUsers = exports.myinfo = exports.deleteUser = exports.getAllUsers = exports.updateUser = exports.registerUser = void 0;
 const fileService_1 = require("../../../utils/fileService");
 const jsonArray_1 = require("../../../utils/jsonArray");
 const registerUser = async (request, reply) => {
@@ -240,13 +273,11 @@ const searchUsers = async (request, reply) => {
                 {
                     name: {
                         contains: search,
-                        mode: "insensitive",
                     },
                 },
                 {
                     email: {
                         contains: search,
-                        mode: "insensitive",
                     },
                 },
             ];
@@ -604,4 +635,74 @@ const removeAllFcm = async (request, reply) => {
     }
 };
 exports.removeAllFcm = removeAllFcm;
+const testFCMToken = async (request, reply) => {
+    try {
+        const { token } = request.body;
+        if (!token) {
+            return reply.status(400).send({
+                success: false,
+                message: "FCM token is required"
+            });
+        }
+        // Test with a simple notification
+        const testData = {
+            type: "test",
+            title: "Test Notification",
+            body: "This is a test notification",
+            timestamp: new Date().toISOString()
+        };
+        const result = await request.server.sendDataPush(token, testData);
+        return reply.status(200).send({
+            success: result.success,
+            messageId: result.messageId,
+            error: result.error,
+            tokenPreview: token.substring(0, 20) + "..."
+        });
+    }
+    catch (error) {
+        request.log.error(error);
+        return reply.status(500).send({
+            success: false,
+            error: error.message
+        });
+    }
+};
+exports.testFCMToken = testFCMToken;
+const admin = __importStar(require("firebase-admin"));
+const testFirebase = async (request, reply) => {
+    try {
+        // Check Firebase status
+        const status = {
+            appsLength: admin.apps ? admin.apps.length : 0,
+            isFirebaseInitialized: admin.apps && admin.apps.length > 0,
+            hasServiceAccount: !!process.env.FIREBASE_SERVICE_ACCOUNT,
+            serviceAccountLength: process.env.FIREBASE_SERVICE_ACCOUNT?.length || 0,
+            privateKeyPresent: process.env.FIREBASE_SERVICE_ACCOUNT?.includes('PRIVATE KEY') || false
+        };
+        // Try to get Firebase project info
+        let projectInfo = null;
+        if (admin.apps && admin.apps.length > 0) {
+            try {
+                projectInfo = await admin.apps[0].options.credential?.getAccessToken();
+            }
+            catch (err) {
+                projectInfo = { error: err.message };
+            }
+        }
+        return reply.status(200).send({
+            success: true,
+            firebaseStatus: status,
+            projectInfo,
+            environment: process.env.NODE_ENV
+        });
+    }
+    catch (error) {
+        request.log.error(error);
+        return reply.status(500).send({
+            success: false,
+            error: error.message
+        });
+    }
+};
+exports.testFirebase = testFirebase;
 //# sourceMappingURL=auth.controllers.js.map

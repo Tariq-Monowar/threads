@@ -224,9 +224,23 @@ export default fp(async (fastify) => {
 
         leaveConversationRoom(userId, conversationId);
         socket.emit("conversation_left", { conversationId, userId });
-        try {
-          const userIdInt = parseInt(userId);
-          if (!Number.isNaN(userIdInt)) {
+        
+        setImmediate(async () => {
+          try {
+            const userIdInt = parseInt(userId);
+            if (Number.isNaN(userIdInt)) {
+              console.log("[LEAVE] Invalid userId:", userId);
+              return;
+            }
+
+            // Check if there are any other users still in the conversation room
+            const remainingUsers = getUsersInConversationRoom(conversationId);
+            console.log("[LEAVE] Remaining users in room after leave:", remainingUsers);
+            console.log("[LEAVE] Marking messages as unread for conversation:", conversationId);
+            console.log("[LEAVE] User leaving:", userIdInt);
+
+            // Mark messages as unread when user leaves
+            // If other users are still in room, they will mark as read again when they join
             const updateResult = await fastify.prisma.message.updateMany({
               where: {
                 conversationId,
@@ -237,8 +251,36 @@ export default fp(async (fastify) => {
                 isDelivered: false,
               },
             });
+            
+            console.log("[LEAVE] ✅ Updated messages count:", updateResult.count);
+            
+            // Verify the update worked by checking a sample message
+            if (updateResult.count > 0) {
+              const sampleMessage = await fastify.prisma.message.findFirst({
+                where: {
+                  conversationId,
+                  NOT: { userId: userIdInt },
+                },
+                select: {
+                  id: true,
+                  isRead: true,
+                  isDelivered: true,
+                },
+              });
+              console.log("[LEAVE] ✅ Verification - Sample message:", {
+                id: sampleMessage?.id,
+                isRead: sampleMessage?.isRead,
+                isDelivered: sampleMessage?.isDelivered,
+              });
+            } else {
+              console.log("[LEAVE] ⚠️ No messages were updated (count is 0)");
+            }
+          } catch (error: any) {
+            console.error("[LEAVE] ❌ Error marking messages as unread:", error);
+            console.error("[LEAVE] ❌ Error message:", error?.message);
+            console.error("[LEAVE] ❌ Error stack:", error?.stack);
           }
-        } catch (error: any) {}
+        });
       }
     );
 

@@ -370,7 +370,7 @@ const getConversationsByUserId = async (request, reply) => {
                 conversationId: conversation.id,
                 userId: { not: currentUserId },
                 isRead: false,
-                NOT: { deletedForUsers: { has: currentUserId } },
+                NOT: { deletedForUsers: { array_contains: currentUserId } },
             },
         });
         const participantIds = getParticipantIds(conversation.members);

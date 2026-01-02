@@ -32,7 +32,7 @@ const blockUser = async (request, reply) => {
                 message: "One or both users not found",
             });
         }
-        // Find conversation between the two users (if exists)
+        // Find private conversation between these two users (if exists)
         const conversation = await prisma.conversation.findFirst({
             where: {
                 isGroup: false,
@@ -73,7 +73,8 @@ const blockUser = async (request, reply) => {
                 : null,
             createdAt: block.createdAt,
         };
-        request.server.io.emit("blockUser", data);
+        // request.server.io.emit("blockUser", data);
+        request.server.io.to(otherId.toString()).emit("blockUser", data);
         return reply.status(201).send({
             success: true,
             message: "User blocked",
@@ -147,19 +148,19 @@ const unblockUser = async (request, reply) => {
                 message: "User is not blocked!",
             });
         }
-        // Find conversation between the two users (if exists)
         const conversation = await prisma.conversation.findFirst({
             where: {
                 isGroup: false,
                 AND: [
-                    { members: { some: { userId: myIdInt, isDeleted: false } } },
-                    { members: { some: { userId: otherIdInt, isDeleted: false } } },
+                    { members: { some: { userId: myId, isDeleted: false } } },
+                    { members: { some: { userId: otherId, isDeleted: false } } },
                 ],
             },
             select: {
                 id: true,
             },
         });
+        console.log("conversation", conversation);
         // Format block data before deleting
         const formattedBlock = {
             conversationId: conversation?.id || null,
@@ -181,8 +182,10 @@ const unblockUser = async (request, reply) => {
                 },
             },
         });
-        // Send socket event
-        request.server.io.emit("unblockUser", formattedBlock);
+        // Send socket event to the other user
+        request.server.io
+            .to(otherId.toString())
+            .emit("unblockUser", formattedBlock);
         return reply.send({
             success: true,
             message: "User unblocked successfully",

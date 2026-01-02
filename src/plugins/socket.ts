@@ -78,7 +78,6 @@ export default fp(async (fastify) => {
       io.emit("online-users", getOnlineUserIds());
     });
 
-
     // 2. Typing Indicators (based on conversation rooms)
     const handleTyping = (
       eventType: "start_typing" | "stop_typing",
@@ -122,8 +121,6 @@ export default fp(async (fastify) => {
     handleTyping("start_typing", true);
     handleTyping("stop_typing", false);
 
-
-
     //-----------------------------------------------------------
 
     // 3. Get online users
@@ -142,7 +139,10 @@ export default fp(async (fastify) => {
         userId: string;
       }) => {
         if (!conversationId || !userId) {
-          console.log("join_conversation", "conversationId or userId is missing");
+          console.log(
+            "join_conversation",
+            "conversationId or userId is missing"
+          );
           return;
         }
         console.log("join_conversation", "============Heat==============");
@@ -214,16 +214,17 @@ export default fp(async (fastify) => {
         conversationId: string;
         userId: string;
       }) => {
-        if (!conversationId || !userId){
-          console.log("conversation_left", "conversationId or userId is missing");
+        if (!conversationId || !userId) {
+          console.log(
+            "conversation_left",
+            "conversationId or userId is missing"
+          );
           return;
-        } 
-;
-
+        }
         const userIdStr = userId.toString();
         const removed = leaveConversationRoom(userIdStr, conversationId);
         socket.emit("conversation_left", { conversationId, userId: userIdStr });
-        
+
         setImmediate(async () => {
           try {
             const userIdInt = parseInt(userId);
@@ -234,7 +235,7 @@ export default fp(async (fastify) => {
 
             // Check if there are any other users still in the conversation room
             const remainingUsers = getUsersInConversationRoom(conversationId);
-            
+
             // Mark messages as unread when user leaves
             // If other users are still in room, they will mark as read again when they join
             const updateResult = await fastify.prisma.message.updateMany({
@@ -247,8 +248,7 @@ export default fp(async (fastify) => {
                 isDelivered: false,
               },
             });
-            
-            
+
             // Verify the update worked by checking a sample message
             if (updateResult.count > 0) {
               const sampleMessage = await fastify.prisma.message.findFirst({
@@ -262,20 +262,20 @@ export default fp(async (fastify) => {
                   isDelivered: true,
                 },
               });
-         
             } else {
               console.log("[LEAVE] ⚠️ No messages were updated (count is 0)");
             }
           } catch (error: any) {
-            console.error("[LEAVE] ❌ Error marking messages as unread:", error);
+            console.error(
+              "[LEAVE] ❌ Error marking messages as unread:",
+              error
+            );
             console.error("[LEAVE] ❌ Error message:", error?.message);
             console.error("[LEAVE] ❌ Error stack:", error?.stack);
           }
         });
       }
     );
-
-    
 
     //-----------------------------------------------------------
     // 'callerId': callerId,
@@ -357,7 +357,10 @@ export default fp(async (fastify) => {
           avatar: callerAvatar || null,
         };
 
-        const receiverFcmTokens = await getJsonArray<string>(receiverData?.fcmToken, []);
+        const receiverFcmTokens = await getJsonArray<string>(
+          receiverData?.fcmToken,
+          []
+        );
 
         // Send push only to receiver (via FCM tokens)
         if (receiverFcmTokens.length > 0) {
@@ -391,7 +394,6 @@ export default fp(async (fastify) => {
                 })
               );
             }
-
 
             if (pushPromises.length > 0) {
               await Promise.allSettled(pushPromises).catch(() => {});
@@ -466,7 +468,10 @@ export default fp(async (fastify) => {
         if (!callData || callData.with !== calleeId) return;
 
         // Update status to in_call
-        await activeCalls.set(callerIdLocal, { ...callData, status: "in_call" });
+        await activeCalls.set(callerIdLocal, {
+          ...callData,
+          status: "in_call",
+        });
         await activeCalls.set(calleeId, {
           with: callerIdLocal,
           status: "in_call",
@@ -601,7 +606,7 @@ export default fp(async (fastify) => {
         if (!senderId || !receiverId) return;
 
         // Check if there's an active call between these users
-       const senderCall = await activeCalls.get(senderId);
+        const senderCall = await activeCalls.get(senderId);
         const receiverCall = await activeCalls.get(receiverId);
 
         if (
@@ -621,8 +626,9 @@ export default fp(async (fastify) => {
         // CRITICAL FIX: Check if receiver has set remote description
         // If both have set remote descriptions, send immediately
         // Otherwise, buffer candidates (they'll be flushed when remote description is set)
-        const isTURNRelay = await candidate.candidate?.includes("typ relay") ?? false;
-        
+        const isTURNRelay =
+          (await candidate.candidate?.includes("typ relay")) ?? false;
+
         // If call is already in "in_call" status, it means SDP exchange is complete
         // So we can send the candidate immediately without buffering
         if (
@@ -639,7 +645,7 @@ export default fp(async (fastify) => {
             candidate,
             timestamp: Date.now(),
           });
-          
+
           // Log TURN relay candidates for debugging
           if (isTURNRelay) {
             console.log(
@@ -650,82 +656,16 @@ export default fp(async (fastify) => {
       }
     );
 
-    // // New event: Flush buffered ICE candidates (called by client after setting remote description)
-    // socket.on("webrtc_ice_flush", ({ peerId }: { peerId: string }) => {
-    //   const userId = getUserId();
-    //   if (!userId || !peerId) return;
-
-    //   // CRITICAL FIX: Check both directions for buffered candidates
-    //   // Candidates can be buffered in either direction depending on who sent them first
-    //   const bufferKey1 = `${userId}-${peerId}`; // Candidates from userId to peerId
-    //   const bufferKey2 = `${peerId}-${userId}`; // Candidates from peerId to userId
-      
-    //   const bufferedCandidates1 = iceCandidateBuffers.get(bufferKey1);
-    //   const bufferedCandidates2 = iceCandidateBuffers.get(bufferKey2);
-
-    //   const peerSockets = getSocketsForUser(peerId);
-    //   if (peerSockets && peerSockets.size > 0) {
-    //     // Send candidates from userId to peerId (caller's candidates to receiver)
-    //     if (bufferedCandidates1 && bufferedCandidates1.length > 0) {
-    //       // Prioritize TURN relay candidates
-    //       const relayCandidates = bufferedCandidates1.filter((item) =>
-    //         item.candidate?.candidate?.includes("typ relay")
-    //       );
-    //       const otherCandidates = bufferedCandidates1.filter(
-    //         (item) => !item.candidate?.candidate?.includes("typ relay")
-    //       );
-
-    //       // Send TURN relay candidates first (critical for cross-network)
-    //       relayCandidates.forEach((item) => {
-    //         io.to(peerId).emit("webrtc_ice", {
-    //           senderId: userId,
-    //           candidate: item.candidate,
-    //         });
-    //       });
-
-    //       // Then send other candidates
-    //       otherCandidates.forEach((item) => {
-    //         io.to(peerId).emit("webrtc_ice", {
-    //           senderId: userId,
-    //           candidate: item.candidate,
-    //         });
-    //       });
-
-    //       iceCandidateBuffers.delete(bufferKey1);
-    //     }
-
-    //     // Send candidates from peerId to userId (receiver's candidates to caller)
-    //     if (bufferedCandidates2 && bufferedCandidates2.length > 0) {
-    //       const relayCandidates = bufferedCandidates2.filter((item) =>
-    //         item.candidate?.candidate?.includes("typ relay")
-    //       );
-    //       const otherCandidates = bufferedCandidates2.filter(
-    //         (item) => !item.candidate?.candidate?.includes("typ relay")
-    //       );
-
-    //       relayCandidates.forEach((item) => {
-    //         io.to(userId).emit("webrtc_ice", {
-    //           senderId: peerId,
-    //           candidate: item.candidate,
-    //         });
-    //       });
-
-    //       otherCandidates.forEach((item) => {
-    //         io.to(userId).emit("webrtc_ice", {
-    //           senderId: peerId,
-    //           candidate: item.candidate,
-    //         });
-    //       });
-
-    //       iceCandidateBuffers.delete(bufferKey2);
-    //     }
-    //   }
-    // });
-
     // 11. Call Decline
     socket.on(
       "call_decline",
-      async ({ callerId, receiverId }: { callerId: string; receiverId: string }) => {
+      async ({
+        callerId,
+        receiverId,
+      }: {
+        callerId: string;
+        receiverId: string;
+      }) => {
         await activeCalls.delete(callerId);
         await activeCalls.delete(receiverId);
 
@@ -841,7 +781,10 @@ export default fp(async (fastify) => {
                 (u) => u.id === Number(endedByUserId)
               );
 
-              const opponentFcmTokens = getJsonArray<string>(opponentData?.fcmToken, []);
+              const opponentFcmTokens = getJsonArray<string>(
+                opponentData?.fcmToken,
+                []
+              );
               if (opponentFcmTokens.length > 0) {
                 const endedByUserInfo = endedByUserData
                   ? {
@@ -863,7 +806,9 @@ export default fp(async (fastify) => {
                     callType: String(callType),
                     endedBy: String(endedByUserId),
                     reason: wasAccepted ? "completed" : "canceled",
-                    ...(endedByUserInfo ? { endedByUserInfo: endedByUserInfo } : {}),
+                    ...(endedByUserInfo
+                      ? { endedByUserInfo: endedByUserInfo }
+                      : {}),
                   }),
                 };
 
@@ -894,14 +839,20 @@ export default fp(async (fastify) => {
     );
 
     socket.on(
+      // এখানে তাই ঘটবে যেটা আমি call_end এ ঘটাতাম
       "answer_complete",
-      ({ receiverId, data }: { receiverId: string; data: any }) => {
+      ({
+        receiverId,
+        callerId,
+        data,
+      }: {
+        receiverId: string;
+        callerId: string;
+        data: any;
+      }) => {
         const senderId = getUserId();
 
-        if (!senderId || !receiverId) {
-          console.log("[answer_complete] Missing sender or receiver ID");
-          return;
-        }
+        clearIceCandidateBuffer(callerId, receiverId);
 
         io.to(receiverId).emit("answer_complete", {
           senderId,
@@ -909,46 +860,49 @@ export default fp(async (fastify) => {
         });
       }
     );
-
+    //--------------------------------------------------------------------
     // 13. Answer Complete — forward to the opposite user
-    // socket.on(
-    //   "answer_complete",
-    //   ({ receiverId, data }: { receiverId: string; data: any }) => {
-    //     const senderId = getUserId();
-    //     if (!senderId || !receiverId) return;
+    // এখাতে তাই ঘটবে যেটা আমি কল ইন্ড করলেই ঘটাই
+    socket.on(
+      "answer_complete",
+      ({ receiverId, data }: { receiverId: string; data: any }) => {
+        const senderId = getUserId();
+        if (!senderId || !receiverId) return;
 
-    //     const senderCall = activeCalls.get(senderId);
-    //     const receiverCall = activeCalls.get(receiverId);
-    //     console.log(receiverId, data);
-    //     if (
-    //       !senderCall ||
-    //       !receiverCall ||
-    //       senderCall.with !== receiverId ||
-    //       receiverCall.with !== senderId
-    //     ) {
-    //       console.warn("[answer_complete] Users not in active call, ignoring");
-    //       return;
-    //     }
+        const senderCall = activeCalls.get(senderId);
+        const receiverCall = activeCalls.get(receiverId);
+        console.log(receiverId, data);
+        if (
+          !senderCall ||
+          !receiverCall ||
+          senderCall.with !== receiverId ||
+          receiverCall.with !== senderId
+        ) {
+          console.warn("[answer_complete] Users not in active call, ignoring");
+          return;
+        }
 
-    //     const receiverSockets = getSocketsForUser(receiverId);
-    //     if (receiverSockets && receiverSockets.size > 0) {
-    //       console.log(
-    //         `[answer_complete] Forwarding data from ${senderId} to ${receiverId}`,
-    //         data
-    //       );
-    //       io.to(receiverId).emit("answer_complete", {
-    //         senderId,
-    //         data,
-    //       });
-    //     }
-    //   }
-    // );
+        const receiverSockets = getSocketsForUser(receiverId);
+        if (receiverSockets && receiverSockets.size > 0) {
+          console.log(
+            `[answer_complete] Forwarding data from ${senderId} to ${receiverId}`,
+            data
+          );
+          io.to(receiverId).emit("answer_complete", {
+            senderId,
+            data,
+          });
+        }
+      }
+    );
 
     // 14. Call Offer Resend (caller resends offer if missed)
     // 14. Call Offer Resend (caller resends offer if missed)
+
+    //এখানে আমিশেটাই ঘটাবো যেটা আমি webrtc_offer এ ঘটাতাম
     socket.on(
       "call_offer_resend",
-      ({
+      async ({
         receiverId,
         sdp,
         callType,
@@ -959,37 +913,13 @@ export default fp(async (fastify) => {
         callType: CallType;
         callerInfo: any;
       }) => {
-        const senderId = getUserId();
-
-        console.log("[CALL][OFFER_RESEND] Incoming request", {
-          senderId,
-          receiverId,
-          callType,
-        });
-
+        const senderId = await getUserId();
         if (!senderId || !receiverId) return;
 
-        const existingCall = activeCalls.get(senderId);
-        if (!existingCall || existingCall.with !== receiverId) return;
-
-        const receiverSockets = getSocketsForUser(receiverId);
-        if (!receiverSockets || receiverSockets.size === 0) return;
-
-        // 🔥 SOFT RESET (same as call_end but without deleting call)
-        clearIceCandidateBuffer(senderId, receiverId);
-
-        // Reset state to calling (important)
-        activeCalls.set(senderId, {
-          ...existingCall,
-          status: "calling",
-        });
-        activeCalls.set(receiverId, {
-          with: senderId,
-          status: "calling",
-          type: existingCall.type,
-        });
-
-        console.log("[CALL][OFFER_RESEND] Soft reset done, resending offer");
+        const bufferKey1 = `${receiverId}-${senderId}`;
+        const bufferKey2 = `${senderId}-${receiverId}`;
+        await iceCandidateBuffers.delete(bufferKey1);
+        await iceCandidateBuffers.delete(bufferKey2);
 
         // 🔁 RESEND OFFER
         io.to(receiverId).emit("call_offer_resend", {
@@ -1002,63 +932,67 @@ export default fp(async (fastify) => {
     );
 
     // 15. Request Offer (receiver asks for offer if missed)
+    // এখানে আমিশেটাই ঘটাবো যেটা আমি call_answer_recent এ ঘটাতাম
     socket.on(
       "call_answer_recent",
-      ({
+      async ({
         callerId,
         sdp,
       }: {
         callerId: string;
         sdp: RTCSessionDescriptionInit;
       }) => {
-        const receiverId = getUserId();
+        const senderId = getUserId();
+        if (!senderId || !callerId) return;
 
-        console.log("[CALL][ANSWER_RECENT] Receiver requested recent offer", {
-          receiverId,
-          callerId,
-        });
+        const bufferKeyFromCallerToReceiver = `${senderId}-${callerId}`; // Candidates from caller to receiver
+        const bufferKeyFromReceiverToCaller = `${callerId}-${senderId}`; // Candidates from receiver to caller
+        const bufferedCandidatesFromCaller = iceCandidateBuffers.get(
+          bufferKeyFromCallerToReceiver
+        );
+        const bufferedCandidatesFromReceiver = iceCandidateBuffers.get(
+          bufferKeyFromReceiverToCaller
+        );
 
-        if (!receiverId || !callerId) {
-          console.warn("[CALL][ANSWER_RECENT] Missing receiverId or callerId");
-          return;
-        }
-
-        const callerData = activeCalls.get(callerId);
-
-        if (!callerData) {
-          console.warn(
-            "[CALL][ANSWER_RECENT] No active call found for caller",
-            {
-              callerId,
-            }
-          );
-          return;
-        }
-
-        if (callerData.with !== receiverId) {
-          console.warn("[CALL][ANSWER_RECENT] Call partner mismatch", {
-            expected: callerData.with,
-            actual: receiverId,
-          });
-          return;
-        }
-
+        // Emit answer to caller first
         const callerSockets = getSocketsForUser(callerId);
 
-        if (!callerSockets || callerSockets.size === 0) {
-          console.warn("[CALL][ANSWER_RECENT] Caller is offline", {
-            callerId,
-          });
-          return;
+        if (callerSockets && callerSockets.size > 0) {
+          io.to(callerId).emit("webrtc_answer", { senderId, sdp });
+
+          // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
+          if (
+            bufferedCandidatesFromReceiver &&
+            bufferedCandidatesFromReceiver.length > 0
+          ) {
+            bufferedCandidatesFromReceiver.forEach((item) => {
+              io.to(callerId).emit("webrtc_ice", {
+                senderId,
+                candidate: item.candidate,
+              });
+            });
+            iceCandidateBuffers.delete(bufferKeyFromReceiverToCaller);
+          }
+
+          const receiverSockets = getSocketsForUser(senderId);
+          if (receiverSockets && receiverSockets.size > 0) {
+            if (
+              bufferedCandidatesFromCaller &&
+              bufferedCandidatesFromCaller.length > 0
+            ) {
+              bufferedCandidatesFromCaller.forEach((item) => {
+                io.to(senderId).emit("webrtc_ice", {
+                  senderId: callerId,
+                  candidate: item.candidate,
+                });
+              });
+              iceCandidateBuffers.delete(bufferKeyFromCallerToReceiver);
+            }
+          }
         }
 
-        console.log("[CALL][ANSWER_RECENT] Notifying caller to resend offer", {
-          callerId,
-          socketCount: callerSockets.size,
-        });
-
         io.to(callerId).emit("call_answer_recent", {
-          receiverId,
+          callerId,
           sdp,
         });
       }

@@ -230,7 +230,6 @@ export default fp(async (fastify) => {
             const updateResult = await fastify.prisma.message.updateMany({
               where: {
                 conversationId,
-                isRead: true,
                 NOT: { userId: userIdInt },
               },
               data: {

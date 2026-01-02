@@ -239,6 +239,7 @@ export default fp(async (fastify) => {
             console.log("[LEAVE] Marking messages as unread for conversation:", conversationId);
             console.log("[LEAVE] User leaving:", userIdInt);
 
+            
             // Mark messages as unread when user leaves
             // If other users are still in room, they will mark as read again when they join
             const updateResult = await fastify.prisma.message.updateMany({

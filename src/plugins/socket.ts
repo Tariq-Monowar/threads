@@ -222,8 +222,10 @@ export default fp(async (fastify) => {
         console.log("conversationId", conversationId);
         console.log("userId", userId);
 
-        leaveConversationRoom(userId, conversationId);
-        socket.emit("conversation_left", { conversationId, userId });
+        const userIdStr = userId.toString();
+        const removed = leaveConversationRoom(userIdStr, conversationId);
+        console.log("[LEAVE] User removal result:", removed);
+        socket.emit("conversation_left", { conversationId, userId: userIdStr });
         
         setImmediate(async () => {
           try {
@@ -236,8 +238,9 @@ export default fp(async (fastify) => {
             // Check if there are any other users still in the conversation room
             const remainingUsers = getUsersInConversationRoom(conversationId);
             console.log("[LEAVE] Remaining users in room after leave:", remainingUsers);
+            console.log("[LEAVE] User that left (string):", userIdStr);
             console.log("[LEAVE] Marking messages as unread for conversation:", conversationId);
-            console.log("[LEAVE] User leaving:", userIdInt);
+            console.log("[LEAVE] User leaving (int):", userIdInt);
 
             
             // Mark messages as unread when user leaves

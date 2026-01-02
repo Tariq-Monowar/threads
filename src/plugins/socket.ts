@@ -838,8 +838,10 @@ export default fp(async (fastify) => {
       }
     );
 
+    // 13. Answer Complete — forward to the opposite user
+    // call-end korle za gotbe answer_complete tai hobe
+    // এখানে তাই ঘটবে যেটা আমি call_end এ ঘটাতাম
     socket.on(
-      // এখানে তাই ঘটবে যেটা আমি call_end এ ঘটাতাম
       "answer_complete",
       ({
         receiverId,
@@ -847,39 +849,29 @@ export default fp(async (fastify) => {
         data,
       }: {
         receiverId: string;
-        callerId: string;
+        callerId?: string;
         data: any;
       }) => {
         const senderId = getUserId();
-
-        clearIceCandidateBuffer(callerId, receiverId);
-
-        io.to(receiverId).emit("answer_complete", {
-          senderId,
-          data,
-        });
-      }
-    );
-    //--------------------------------------------------------------------
-    // 13. Answer Complete — forward to the opposite user
-    // এখাতে তাই ঘটবে যেটা আমি কল ইন্ড করলেই ঘটাই
-    socket.on(
-      "answer_complete",
-      ({ receiverId, data }: { receiverId: string; data: any }) => {
-        const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
-        const senderCall = activeCalls.get(senderId);
-        const receiverCall = activeCalls.get(receiverId);
-        console.log(receiverId, data);
-        if (
-          !senderCall ||
-          !receiverCall ||
-          senderCall.with !== receiverId ||
-          receiverCall.with !== senderId
-        ) {
-          console.warn("[answer_complete] Users not in active call, ignoring");
-          return;
+        // Validate active call if callerId is provided
+        if (callerId) {
+          const senderCall = activeCalls.get(senderId);
+          const receiverCall = activeCalls.get(receiverId);
+          
+          if (
+            !senderCall ||
+            !receiverCall ||
+            senderCall.with !== receiverId ||
+            receiverCall.with !== senderId
+          ) {
+            console.warn("[answer_complete] Users not in active call, ignoring");
+            return;
+          }
+
+          // Clear ICE candidate buffer (same as call_end does)
+          clearIceCandidateBuffer(callerId, receiverId);
         }
 
         const receiverSockets = getSocketsForUser(receiverId);
@@ -958,7 +950,14 @@ export default fp(async (fastify) => {
         const callerSockets = getSocketsForUser(callerId);
 
         if (callerSockets && callerSockets.size > 0) {
+          // Emit webrtc_answer (same as webrtc_answer handler does)
           io.to(callerId).emit("webrtc_answer", { senderId, sdp });
+
+          // Also emit call_answer_recent for frontend to know this is a recent answer
+          io.to(callerId).emit("call_answer_recent", {
+            senderId,
+            sdp,
+          });
 
           // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
           if (
@@ -974,6 +973,7 @@ export default fp(async (fastify) => {
             iceCandidateBuffers.delete(bufferKeyFromReceiverToCaller);
           }
 
+          // Send buffered ICE candidates FROM caller TO receiver (caller sent these before answer)
           const receiverSockets = getSocketsForUser(senderId);
           if (receiverSockets && receiverSockets.size > 0) {
             if (
@@ -990,11 +990,6 @@ export default fp(async (fastify) => {
             }
           }
         }
-
-        io.to(callerId).emit("call_answer_recent", {
-          callerId,
-          sdp,
-        });
       }
     );
 

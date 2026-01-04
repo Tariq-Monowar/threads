@@ -159,11 +159,9 @@ export default fp(async (fastify) => {
         setImmediate(async () => {
           try {
             const userIdInt = parseInt(userId);
-            if (Number.isNaN(userIdInt)) {
-              console.error("[JOIN_CONVERSATION] Invalid userId:", userId);
-              return;
-            }
+            if (Number.isNaN(userIdInt)) return;
 
+            // Mark all unread messages from other users as read when joining conversation room
             const [updateResult, members] = await Promise.all([
               fastify.prisma.message.updateMany({
                 where: {
@@ -185,16 +183,14 @@ export default fp(async (fastify) => {
               }),
             ]);
 
-            console.log(
-              `[JOIN_CONVERSATION] Updated ${updateResult.count} messages as read for conversation ${conversationId} by user ${userIdInt}`
-            );
-
+            // Emit read status update to other members if messages were marked as read
             if (updateResult.count > 0) {
               const readStatusData = {
                 success: true,
                 conversationId,
                 markedBy: userIdInt,
                 markedAsRead: true,
+                isDelivered: true,
               };
 
               members.forEach((member) => {
@@ -203,16 +199,15 @@ export default fp(async (fastify) => {
                     "messages_marked_read",
                     readStatusData
                   );
+                  io.to(member.userId.toString()).emit(
+                    "message_delivered",
+                    readStatusData
+                  );
                 }
               });
             }
           } catch (error: any) {
-            console.error(
-              "[JOIN_CONVERSATION] Error marking messages as read:",
-              error
-            );
-            console.error("[JOIN_CONVERSATION] Error message:", error?.message);
-            console.error("[JOIN_CONVERSATION] Error stack:", error?.stack);
+            console.error("[JOIN_CONVERSATION] Error marking messages as read:", error);
           }
         });
       }
@@ -239,49 +234,10 @@ export default fp(async (fastify) => {
         const removed = leaveConversationRoom(userIdStr, conversationId);
         socket.emit("conversation_left", { conversationId, userId: userIdStr });
 
-        setImmediate(async () => {
-          try {
-            const userIdInt = parseInt(userId);
-            if (Number.isNaN(userIdInt)) {
-              console.error("[LEAVE_CONVERSATION] Invalid userId:", userId);
-              return;
-            }
-
-            // Check if there are any other users still in the conversation room
-            const remainingUsers = getUsersInConversationRoom(conversationId);
-
-            // Only mark messages as unread if no other users are in the room
-            // If other users are still in room, they will keep messages as read
-            if (remainingUsers.length === 0) {
-              const updateResult = await fastify.prisma.message.updateMany({
-                where: {
-                  conversationId,
-                  isRead: true,
-                  NOT: { userId: userIdInt },
-                },
-                data: {
-                  isRead: false,
-                  isDelivered: false,
-                },
-              });
-
-              console.log(
-                `[LEAVE_CONVERSATION] Marked ${updateResult.count} messages as unread for conversation ${conversationId} (no users in room)`
-              );
-            } else {
-              console.log(
-                `[LEAVE_CONVERSATION] Keeping messages as read - ${remainingUsers.length} user(s) still in room`
-              );
-            }
-          } catch (error: any) {
-            console.error(
-              "[LEAVE_CONVERSATION] ❌ Error marking messages as unread:",
-              error
-            );
-            console.error("[LEAVE_CONVERSATION] ❌ Error message:", error?.message);
-            console.error("[LEAVE_CONVERSATION] ❌ Error stack:", error?.stack);
-          }
-        });
+        // NOTE: We do NOT mark messages as unread when leaving a conversation room.
+        // Messages should remain read in the database. The read status is persistent
+        // and should only change when explicitly marked via API or when joining a room.
+        // Leaving a room is just a UI state change, not a read status change.
       }
     );
 

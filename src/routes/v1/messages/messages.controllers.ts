@@ -788,31 +788,7 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
     }
 
     const myIdInt = parseInt(myId);
-    if (Number.isNaN(myIdInt)) {
-      return reply.status(400).send({
-        success: false,
-        message: "Invalid user ID provided!",
-      });
-    }
 
-    // Verify user is a member of the conversation
-    const memberCheck = await prisma.conversationMember.findFirst({
-      where: {
-        conversationId,
-        userId: myIdInt,
-        isDeleted: false,
-      },
-      select: { id: true },
-    });
-
-    if (!memberCheck) {
-      return reply.status(403).send({
-        success: false,
-        message: "You don't have access to this conversation",
-      });
-    }
-
-    // Find unread messages from other users
     const unreadMessages = await prisma.message.findMany({
       where: {
         conversationId,
@@ -837,7 +813,6 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       });
     }
 
-    // Update messages to read and delivered
     const [result, members] = await Promise.all([
       prisma.message.updateMany({
         where: {
@@ -863,16 +838,12 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       }),
     ]);
 
-    request.log.info(
-      `[MARK_READ] Marked ${result.count} messages as read for conversation ${conversationId} by user ${myIdInt}`
-    );
-
     const readStatusData = {
       success: true,
       conversationId,
       markedBy: myIdInt,
       markedAsRead: true,
-      markedCount: result.count,
+      isDelivered: true,
     };
 
     // Emit to other members only (exclude the user who made the API call)
@@ -881,6 +852,9 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
         request.server.io
           .to(member.userId.toString())
           .emit("messages_marked_read", readStatusData);
+        request.server.io
+          .to(member.userId.toString())
+          .emit("message_delivered", readStatusData);
       }
     });
 
@@ -890,14 +864,14 @@ export const markMultipleMessagesAsRead = async (request, reply) => {
       data: {
         conversationId,
         markedAsRead: true,
-        markedCount: result.count,
-        totalUnreadMessages: unreadMessages.length,
+        // markedCount: result.count,
+        // totalUnreadMessages: unreadMessages.length,
       },
     };
 
     return reply.send(responseData);
   } catch (error) {
-    request.log.error(error, "Error marking messages as read");
+    request.log.error(error);
     return reply.status(500).send({
       success: false,
       message: "Failed to mark messages as read",

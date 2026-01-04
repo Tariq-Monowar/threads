@@ -431,9 +431,7 @@ export default fp(async (fastify) => {
           setCallHistoryForPair(callerId, receiverId, callId);
         }
         //---------------------------------------------------
-        // Clear any old ICE candidate buffers for this call
         clearIceCandidateBuffer(callerId, receiverId);
-        // Emit to all sockets of the receiver (supports multiple tabs)
         const receiverSockets = getSocketsForUser(receiverId);
         if (receiverSockets && receiverSockets.size > 0) {
           io.to(receiverId).emit("call_incoming", {
@@ -443,7 +441,6 @@ export default fp(async (fastify) => {
               ...callerInfo,
               avatar: FileService.avatarUrl(callerInfo?.avatar || ""),
             },
-            // offer,
           });
         }
       }
@@ -623,14 +620,9 @@ export default fp(async (fastify) => {
           return;
         }
 
-        // CRITICAL FIX: Check if receiver has set remote description
-        // If both have set remote descriptions, send immediately
-        // Otherwise, buffer candidates (they'll be flushed when remote description is set)
         const isTURNRelay =
           (await candidate.candidate?.includes("typ relay")) ?? false;
 
-        // If call is already in "in_call" status, it means SDP exchange is complete
-        // So we can send the candidate immediately without buffering
         if (
           senderCall.status === "in_call" &&
           receiverCall.status === "in_call"
@@ -722,14 +714,11 @@ export default fp(async (fastify) => {
           activeCalls.delete(callerId);
           activeCalls.delete(receiverId);
 
-          // Clear ICE buffers
           clearIceCandidateBuffer(callerId, receiverId);
 
           const opponentId = endedByUserId === callerId ? receiverId : callerId;
-          // Emit to all sockets of the opponent (except the current socket)
           const opponentSockets = getSocketsForUser(opponentId);
           if (opponentSockets && opponentSockets.size > 0) {
-            // Emit to userId room, which will reach all sockets of that user
             io.to(opponentId).emit("call_ended", {
               endedBy: endedByUserId,
               reason: "ended_by_user",
@@ -839,8 +828,6 @@ export default fp(async (fastify) => {
     );
 
     // 13. Answer Complete — forward to the opposite user
-    // call-end korle za gotbe answer_complete tai hobe
-    // এখানে তাই ঘটবে যেটা আমি call_end এ ঘটাতাম
     socket.on(
       "answer_complete",
       ({
@@ -870,7 +857,6 @@ export default fp(async (fastify) => {
             return;
           }
 
-          // Clear ICE candidate buffer (same as call_end does)
           clearIceCandidateBuffer(callerId, receiverId);
         }
 
@@ -889,9 +875,6 @@ export default fp(async (fastify) => {
     );
 
     // 14. Call Offer Resend (caller resends offer if missed)
-    // 14. Call Offer Resend (caller resends offer if missed)
-
-    //এখানে আমিশেটাই ঘটাবো যেটা আমি webrtc_offer এ ঘটাতাম
     socket.on(
       "call_offer_resend",
       async ({
@@ -913,7 +896,6 @@ export default fp(async (fastify) => {
         await iceCandidateBuffers.delete(bufferKey1);
         await iceCandidateBuffers.delete(bufferKey2);
 
-        // 🔁 RESEND OFFER
         io.to(receiverId).emit("call_offer_resend", {
           callerId: senderId,
           callType,
@@ -924,7 +906,6 @@ export default fp(async (fastify) => {
     );
 
     // 15. Request Offer (receiver asks for offer if missed)
-    // এখানে আমিশেটাই ঘটাবো যেটা আমি call_answer_recent এ ঘটাতাম
     socket.on(
       "call_answer_recent",
       async ({
@@ -959,7 +940,6 @@ export default fp(async (fastify) => {
             sdp,
           });
 
-          // Send buffered ICE candidates FROM receiver TO caller (receiver sent these early)
           if (
             bufferedCandidatesFromReceiver &&
             bufferedCandidatesFromReceiver.length > 0
@@ -973,7 +953,6 @@ export default fp(async (fastify) => {
             iceCandidateBuffers.delete(bufferKeyFromReceiverToCaller);
           }
 
-          // Send buffered ICE candidates FROM caller TO receiver (caller sent these before answer)
           const receiverSockets = getSocketsForUser(senderId);
           if (receiverSockets && receiverSockets.size > 0) {
             if (

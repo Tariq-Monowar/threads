@@ -159,7 +159,10 @@ export default fp(async (fastify) => {
         setImmediate(async () => {
           try {
             const userIdInt = parseInt(userId);
-            if (Number.isNaN(userIdInt)) return;
+            if (Number.isNaN(userIdInt)) {
+              console.error("[JOIN_CONVERSATION] Invalid userId:", userId);
+              return;
+            }
 
             const [updateResult, members] = await Promise.all([
               fastify.prisma.message.updateMany({
@@ -182,6 +185,10 @@ export default fp(async (fastify) => {
               }),
             ]);
 
+            console.log(
+              `[JOIN_CONVERSATION] Updated ${updateResult.count} messages as read for conversation ${conversationId} by user ${userIdInt}`
+            );
+
             if (updateResult.count > 0) {
               const readStatusData = {
                 success: true,
@@ -199,7 +206,14 @@ export default fp(async (fastify) => {
                 }
               });
             }
-          } catch (error: any) {}
+          } catch (error: any) {
+            console.error(
+              "[JOIN_CONVERSATION] Error marking messages as read:",
+              error
+            );
+            console.error("[JOIN_CONVERSATION] Error message:", error?.message);
+            console.error("[JOIN_CONVERSATION] Error stack:", error?.stack);
+          }
         });
       }
     );
@@ -229,49 +243,43 @@ export default fp(async (fastify) => {
           try {
             const userIdInt = parseInt(userId);
             if (Number.isNaN(userIdInt)) {
-              console.log("[LEAVE] Invalid userId:", userId);
+              console.error("[LEAVE_CONVERSATION] Invalid userId:", userId);
               return;
             }
 
             // Check if there are any other users still in the conversation room
             const remainingUsers = getUsersInConversationRoom(conversationId);
 
-            // Mark messages as unread when user leaves
-            // If other users are still in room, they will mark as read again when they join
-            const updateResult = await fastify.prisma.message.updateMany({
-              where: {
-                conversationId,
-                NOT: { userId: userIdInt },
-              },
-              data: {
-                isRead: false,
-                isDelivered: false,
-              },
-            });
-
-            // Verify the update worked by checking a sample message
-            if (updateResult.count > 0) {
-              const sampleMessage = await fastify.prisma.message.findFirst({
+            // Only mark messages as unread if no other users are in the room
+            // If other users are still in room, they will keep messages as read
+            if (remainingUsers.length === 0) {
+              const updateResult = await fastify.prisma.message.updateMany({
                 where: {
                   conversationId,
+                  isRead: true,
                   NOT: { userId: userIdInt },
                 },
-                select: {
-                  id: true,
-                  isRead: true,
-                  isDelivered: true,
+                data: {
+                  isRead: false,
+                  isDelivered: false,
                 },
               });
+
+              console.log(
+                `[LEAVE_CONVERSATION] Marked ${updateResult.count} messages as unread for conversation ${conversationId} (no users in room)`
+              );
             } else {
-              console.log("[LEAVE] ⚠️ No messages were updated (count is 0)");
+              console.log(
+                `[LEAVE_CONVERSATION] Keeping messages as read - ${remainingUsers.length} user(s) still in room`
+              );
             }
           } catch (error: any) {
             console.error(
-              "[LEAVE] ❌ Error marking messages as unread:",
+              "[LEAVE_CONVERSATION] ❌ Error marking messages as unread:",
               error
             );
-            console.error("[LEAVE] ❌ Error message:", error?.message);
-            console.error("[LEAVE] ❌ Error stack:", error?.stack);
+            console.error("[LEAVE_CONVERSATION] ❌ Error message:", error?.message);
+            console.error("[LEAVE_CONVERSATION] ❌ Error stack:", error?.stack);
           }
         });
       }

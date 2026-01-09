@@ -158,6 +158,9 @@ model Call {
   // For group calls, track who joined
   participantIds Json @default("[]")
 
+  // Soft delete - track which users have deleted this call
+  deletedForUsers Json @default("[]")
+
   type   CallType
   status CallStatus @default(ONGOING)
 

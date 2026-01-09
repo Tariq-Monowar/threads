@@ -97,7 +97,7 @@ exports.default = (0, fastify_plugin_1.default)(async (fastify) => {
                 token,
                 notification: {
                     title: data.title || "New Message",
-                    body: data.body || "Guman meya! Hudai, ekta phaltu project-e 10 mash 10 din hoye geche." //"You have a new message!",
+                    body: data.body || "You have a new message!",
                 },
                 data: fcmData,
                 android: {

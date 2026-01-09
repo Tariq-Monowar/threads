@@ -2,6 +2,11 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { PrismaClient } from "@prisma/client";
 import { baseUrl, getImageUrl } from "../../../utils/baseurl";
 import { FileService } from "../../../utils/fileService";
+import {
+  jsonArrayContains,
+  jsonArrayAdd,
+  getJsonArray,
+} from "../../../utils/jsonArray";
 
 interface CallHistoryRequest extends FastifyRequest {
   params: {
@@ -56,45 +61,68 @@ export const getCallHistory = async (
       whereClause.status = status;
     }
 
-    const [calls, totalCount] = await Promise.all([
-      prisma.call.findMany({
-        where: whereClause,
-        include: {
-          caller: {
-            select: {
-              id: true,
-              name: true,
-              avatar: true,
-            },
-          },
-          receiver: {
-            select: {
-              id: true,
-              name: true,
-              avatar: true,
-            },
-          },
-          conversation: {
-            select: {
-              id: true,
-              name: true,
-              avatar: true,
-              isGroup: true,
-            },
+    // Fetch all calls first, then filter out deleted ones in code
+    // MySQL JSON doesn't support { has: ... } filter, so we filter after fetching
+    const allCalls = await prisma.call.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        callerId: true,
+        receiverId: true,
+        type: true,
+        status: true,
+        startedAt: true,
+        endedAt: true,
+        participantIds: true,
+    
+        deletedForUsers: true,
+        caller: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
           },
         },
-        orderBy: {
-          startedAt: "desc",
+        receiver: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
         },
-        skip,
-        take: limitNum,
-      }),
-      prisma.call.count({
-        where: whereClause,
-      }),
-    ]);
+        conversation: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+            isGroup: true,
+          },
+        },
+      },
+      orderBy: {
+        startedAt: "desc",
+      },
+    });
 
-    const formattedCalls = calls.map((call) => {
+    // Filter out calls deleted for this user
+    const calls = allCalls.filter((call: any) => {
+      return !jsonArrayContains(call.deletedForUsers, userIdInt);
+    });
+
+    // Get total count (including deleted ones for accurate pagination)
+    const allCallsForCount = await prisma.call.findMany({
+      where: whereClause,
+      
+      select: { id: true, deletedForUsers: true },
+    });
+    const totalCount = allCallsForCount.filter((call: any) => {
+      return !jsonArrayContains(call.deletedForUsers, userIdInt);
+    }).length;
+
+    // Apply pagination after filtering
+    const paginatedCalls = calls.slice(skip, skip + limitNum);
+
+    const formattedCalls = paginatedCalls.map((call: any) => {
       const isCaller = call.callerId === userIdInt;
       const otherUser = isCaller ? call.receiver : call.caller;
 
@@ -158,12 +186,18 @@ export const getCallHistory = async (
   }
 };
 
+interface GetCallDetailsRequest extends FastifyRequest {
+  params: { callId: string };
+  query: { userId?: string };
+}
+
 export const getCallDetails = async (
-  request: FastifyRequest<{ Params: { callId: string } }>,
+  request: GetCallDetailsRequest,
   reply: FastifyReply
 ) => {
   try {
     const { callId } = request.params;
+    const { userId } = request.query;
 
     if (!callId) {
       return reply.status(400).send({
@@ -172,11 +206,36 @@ export const getCallDetails = async (
       });
     }
 
+    if (!userId) {
+      return reply.status(400).send({
+        success: false,
+        message: "userId is required",
+      });
+    }
+
+    const userIdInt = parseInt(userId);
+    if (Number.isNaN(userIdInt)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid userId",
+      });
+    }
+
     const prisma = request.server.prisma as PrismaClient;
 
     const call = await prisma.call.findUnique({
       where: { id: callId },
-      include: {
+      select: {
+        id: true,
+        callerId: true,
+        receiverId: true,
+        type: true,
+        status: true,
+        startedAt: true,
+        endedAt: true,
+        participantIds: true,
+     
+        deletedForUsers: true,
         caller: {
           select: {
             id: true,
@@ -209,36 +268,45 @@ export const getCallDetails = async (
       });
     }
 
+    // Check if call is deleted for this user
+    const callData = call as any;
+    if (jsonArrayContains(callData.deletedForUsers, userIdInt)) {
+      return reply.status(404).send({
+        success: false,
+        message: "Call not found",
+      });
+    }
+
     const duration =
-      call.endedAt && call.startedAt
-        ? Math.floor((call.endedAt.getTime() - call.startedAt.getTime()) / 1000)
+      callData.endedAt && callData.startedAt
+        ? Math.floor((callData.endedAt.getTime() - callData.startedAt.getTime()) / 1000)
         : null;
 
     return reply.send({
       success: true,
       data: {
-        id: call.id,
-        type: call.type,
-        status: call.status,
-        startedAt: call.startedAt,
-        endedAt: call.endedAt,
+        id: callData.id,
+        type: callData.type,
+        status: callData.status,
+        startedAt: callData.startedAt,
+        endedAt: callData.endedAt,
         duration,
         caller: {
-          id: call.caller.id,
-          name: call.caller.name,
-          avatar: call.caller.avatar
-            ? `${getImageUrl(call.caller.avatar)}`
+          id: callData.caller.id,
+          name: callData.caller.name,
+          avatar: callData.caller.avatar
+            ? `${getImageUrl(callData.caller.avatar)}`
             : null,
         },
         receiver: {
-          id: call.receiver.id,
-          name: call.receiver.name,
-          avatar: call.receiver.avatar
-            ? `${getImageUrl(call.receiver.avatar)}`
+          id: callData.receiver.id,
+          name: callData.receiver.name,
+          avatar: callData.receiver.avatar
+            ? `${getImageUrl(callData.receiver.avatar)}`
             : null,
         },
-        conversation: call.conversation,
-        participantIds: call.participantIds,
+        conversation: callData.conversation,
+        participantIds: callData.participantIds,
       },
     });
   } catch (error: any) {
@@ -251,35 +319,96 @@ export const getCallDetails = async (
   }
 };
 
-//delete a array of call ids
+//delete a array of call ids - soft delete (only for the requesting user)
 
-export const deleteCall = async (request, reply) => {
-  console.log("deleteCall", request.body);
+export const deleteCall = async (
+  request: FastifyRequest<{
+    Body: { callIds: string[]; userId: string };
+  }>,
+  reply: FastifyReply
+) => {
   try {
-    const { callIds } = request.body;
+    const { callIds, userId } = request.body;
+    console.log("===============", callIds, userId)
 
-    if (!callIds) {
+    if (!callIds || !Array.isArray(callIds) || callIds.length === 0) {
       return reply.status(400).send({
         success: false,
-        message: "callIds is required",
+        message: "callIds array is required",
+      });
+    }
+
+    if (!userId) {
+      return reply.status(400).send({
+        success: false,
+        message: "userId is required",
+      });
+    }
+
+    const userIdInt = parseInt(userId);
+    if (Number.isNaN(userIdInt)) {
+      return reply.status(400).send({
+        success: false,
+        message: "Invalid userId",
       });
     }
 
     const prisma = request.server.prisma as PrismaClient;
-    await prisma.call.deleteMany({
+
+    // Fetch all calls to check ownership and update
+    const calls = await prisma.call.findMany({
       where: {
         id: { in: callIds },
+        OR: [{ callerId: userIdInt }, { receiverId: userIdInt }],
+      },
+      select: {
+        id: true,
+        
+        deletedForUsers: true,
       },
     });
 
+    if (calls.length === 0) {
+      return reply.status(404).send({
+        success: false,
+        message: "No calls found or you don't have permission to delete them",
+      });
+    }
+
+    // Update each call to add userId to deletedForUsers
+    const updatePromises = calls.map(async (call: any) => {
+      // Check if already deleted for this user
+      if (jsonArrayContains(call.deletedForUsers, userIdInt)) {
+        return call.id; // Already deleted, skip
+      }
+
+      // Add userId to deletedForUsers
+      const updatedDeletedForUsers = jsonArrayAdd(
+        call.deletedForUsers,
+        userIdInt
+      );
+
+      await prisma.call.update({
+        where: { id: call.id },
+        data: {
+          
+          deletedForUsers: updatedDeletedForUsers,
+        },
+      });
+
+      return call.id;
+    });
+
+    const deletedCallIds = await Promise.all(updatePromises);
+
     return reply.send({
       success: true,
-      message: "Call deleted successfully",
+      message: "Call history deleted successfully",
       data: {
-        callIds,
+        callIds: deletedCallIds.filter(Boolean),
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     request.log.error(error);
     return reply.status(500).send({
       success: false,

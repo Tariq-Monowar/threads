@@ -166,6 +166,7 @@ export const sendMessage = async (request, reply) => {
       const filesCreate = files.length > 0
         ? files.map((file) => ({
             userId: userIdInt,
+            fileName: file.originalname || null,
             fileUrl: file.filename,
             fileType: file.mimetype || null,
             fileSize: typeof file.size === "number" ? file.size : null,

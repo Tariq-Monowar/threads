@@ -8,13 +8,13 @@ datasource db {
 }
 
 model User {
-  id       Int      @id @unique
+  id       Int     @id @unique
   name     String?
   email    String?
   password String?
   avatar   String?
   address  String?
-  fcmToken Json @default("[]")
+  fcmToken Json    @default("[]")
 
   // Relations
   messages      Message[]
@@ -127,11 +127,11 @@ model MessageFile {
   id String @id @default(cuid())
 
   //relations
-  userId    Int?
-  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  messageId String
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
+  userId        Int?
+  user          User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messageId     String
+  message       Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  fileName      String?
   fileUrl       String
   fileType      String?
   fileSize      Int?
@@ -195,8 +195,6 @@ model Block {
   @@unique([blockerId, blockedId])
   @@map("blocks")
 }
-
-
 
 // 1. Block - unblock (সিঙ্গেল কনভার্সেশন এর ক্ষেত্রে myId এবং otherUserId দিয়ে যেনো ব্লক করা যায়, আর গ্রুপ হলে কনভার্সেশন id পাঠাবো। একটা api তেই অপশনাল করে দিবেন)
 // Block - unblock এর socket listen (server - client) ইভেন্ট ও লাগবে

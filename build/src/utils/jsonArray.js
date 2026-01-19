@@ -12,13 +12,13 @@ exports.jsonArrayRemove = jsonArrayRemove;
  * Safely get an array from a JSON field
  */
 function getJsonArray(value, defaultValue = []) {
-    if (Array.isArray(value)) {
+    // Already an array
+    if (Array.isArray(value))
         return value;
-    }
-    if (value === null || value === undefined) {
+    // Null or undefined
+    if (value == null)
         return defaultValue;
-    }
-    // If it's a string, try to parse it
+    // Try parsing string
     if (typeof value === 'string') {
         try {
             const parsed = JSON.parse(value);
@@ -28,30 +28,26 @@ function getJsonArray(value, defaultValue = []) {
             return defaultValue;
         }
     }
+    // Any other type
     return defaultValue;
 }
 /**
  * Check if a JSON array contains a value
  */
 function jsonArrayContains(jsonArray, value) {
-    const array = getJsonArray(jsonArray);
-    return array.includes(value);
+    return getJsonArray(jsonArray).includes(value);
 }
 /**
  * Add a value to a JSON array (avoiding duplicates)
  */
 function jsonArrayAdd(jsonArray, value) {
     const array = getJsonArray(jsonArray);
-    if (!array.includes(value)) {
-        return [...array, value];
-    }
-    return array;
+    return array.includes(value) ? array : [...array, value];
 }
 /**
  * Remove a value from a JSON array
  */
 function jsonArrayRemove(jsonArray, value) {
-    const array = getJsonArray(jsonArray);
-    return array.filter((item) => item !== value);
+    return getJsonArray(jsonArray).filter((item) => item !== value);
 }
 //# sourceMappingURL=jsonArray.js.map

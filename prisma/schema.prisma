@@ -34,6 +34,7 @@ model User {
 
   @@index([name])
   @@index([email])
+  @@index([createdAt])
   @@map("users")
 }
 
@@ -65,6 +66,9 @@ model Conversation {
   updatedAt DateTime @updatedAt
   calls     Call[]
 
+  @@index([isGroup])
+  @@index([updatedAt])
+  @@index([createdAt])
   @@map("conversations")
 }
 
@@ -89,6 +93,9 @@ model ConversationMember {
   muteAt DateTime?
 
   @@unique([userId, conversationId])
+  @@index([conversationId, isDeleted])
+  @@index([userId, isDeleted, isArchived])
+  @@index([conversationId, userId, isDeleted])
   @@map("conversation_members")
 }
 
@@ -120,6 +127,11 @@ model Message {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([conversationId, createdAt])
+  @@index([conversationId, isRead])
+  @@index([userId, conversationId])
+  @@index([conversationId, userId, isRead])
+  @@index([createdAt])
   @@map("messages")
 }
 
@@ -140,6 +152,9 @@ model MessageFile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([messageId])
+  @@index([userId])
+  @@index([createdAt])
   @@map("message_files")
 }
 
@@ -168,6 +183,13 @@ model Call {
   startedAt DateTime  @default(now())
   endedAt   DateTime?
 
+  @@index([callerId, startedAt])
+  @@index([receiverId, startedAt])
+  @@index([callerId, receiverId])
+  @@index([type, status])
+  @@index([status, startedAt])
+  @@index([conversationId])
+  @@index([startedAt])
   @@map("calls")
 }
 
@@ -196,6 +218,9 @@ model Block {
   createdAt DateTime @default(now())
 
   @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+  @@index([createdAt])
   @@map("blocks")
 }
 

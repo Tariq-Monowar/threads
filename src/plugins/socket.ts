@@ -39,6 +39,7 @@ export default fp(async (fastify) => {
     leaveConversationRoom,
     isUserInConversationRoom,
     getUsersInConversationRoom,
+    getUserConversationRooms,
   } = createConversationRoomsStore();
 
   const {
@@ -278,7 +279,7 @@ export default fp(async (fastify) => {
         //   return;
         // }
 
-        if (await activeCalls.has(receiverId)) {
+        if (activeCalls.has(receiverId)) {
           socket.emit("call_busy", { message: "User is busy" });
           return;
         }
@@ -291,7 +292,12 @@ export default fp(async (fastify) => {
           return;
         }
 
-        let usersData;
+        let usersData: Array<{
+          id: number;
+          name: string | null;
+          avatar: string | null;
+          fcmToken: any;
+        }>;
         try {
           usersData = await prisma.user.findMany({
             where: {
@@ -311,9 +317,10 @@ export default fp(async (fastify) => {
           return;
         }
 
-        // Extract caller and receiver info from results
-        const callerInfoFromDb = usersData.find((u) => u.id === callerIdNumber);
-        const receiverData = usersData.find((u) => u.id === receiverIdNumber);
+        // Extract caller and receiver info from results - O(1) lookup using Map
+        const usersMap = new Map(usersData.map(u => [u.id, u]));
+        const callerInfoFromDb = usersMap.get(callerIdNumber);
+        const receiverData = usersMap.get(receiverIdNumber);
 
         const callerInfo = callerInfoFromDb || {
           id: callerIdNumber,
@@ -321,7 +328,7 @@ export default fp(async (fastify) => {
           avatar: callerAvatar || null,
         };
 
-        const receiverFcmTokens = await getJsonArray<string>(
+        const receiverFcmTokens = getJsonArray<string>(
           receiverData?.fcmToken,
           []
         );
@@ -425,24 +432,24 @@ export default fp(async (fastify) => {
         const callerIdLocal = callerId;
         const calleeId = receiverId;
 
-        const callData = await activeCalls.get(callerIdLocal);
+        const callData = activeCalls.get(callerIdLocal);
         if (!callData || callData.with !== calleeId) return;
 
         // Update status to in_call
-        await activeCalls.set(callerIdLocal, {
+        activeCalls.set(callerIdLocal, {
           ...callData,
           status: "in_call",
         });
-        await activeCalls.set(calleeId, {
+        activeCalls.set(calleeId, {
           with: callerIdLocal,
           status: "in_call",
           type: callData.type,
         });
 
         // Update call history status to ONGOING
-        const callId = await getCallHistoryForPair(callerIdLocal, calleeId);
+        const callId = getCallHistoryForPair(callerIdLocal, calleeId);
         if (callId) {
-          await updateCallHistory(
+          updateCallHistory(
             fastify.prisma as PrismaClient | undefined,
             callId,
             "ONGOING"
@@ -450,7 +457,7 @@ export default fp(async (fastify) => {
         }
 
         // Emit to all sockets of the caller
-        const callerSockets = await getSocketsForUser(callerIdLocal);
+        const callerSockets = getSocketsForUser(callerIdLocal);
         if (callerSockets && callerSockets.size > 0) {
           io.to(callerIdLocal).emit("call_accepted", {
             receiverId: calleeId,
@@ -471,18 +478,18 @@ export default fp(async (fastify) => {
         receiverId: string;
         sdp: RTCSessionDescriptionInit;
       }) => {
-        const senderId = await getUserId();
+        const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
         // When offer is sent, clear any old buffered ICE candidates
         // Clear both directions to ensure clean state
         const bufferKey1 = `${receiverId}-${senderId}`;
         const bufferKey2 = `${senderId}-${receiverId}`;
-        await iceCandidateBuffers.delete(bufferKey1);
-        await iceCandidateBuffers.delete(bufferKey2);
+        iceCandidateBuffers.delete(bufferKey1);
+        iceCandidateBuffers.delete(bufferKey2);
 
         // Emit to all sockets of the receiver
-        const receiverSockets = await getSocketsForUser(receiverId);
+        const receiverSockets = getSocketsForUser(receiverId);
         if (receiverSockets && receiverSockets.size > 0) {
           io.to(receiverId).emit("webrtc_offer", { senderId, sdp });
         }
@@ -567,8 +574,8 @@ export default fp(async (fastify) => {
         if (!senderId || !receiverId) return;
 
         // Check if there's an active call between these users
-        const senderCall = await activeCalls.get(senderId);
-        const receiverCall = await activeCalls.get(receiverId);
+        const senderCall = activeCalls.get(senderId);
+        const receiverCall = activeCalls.get(receiverId);
 
         if (
           !senderCall ||
@@ -579,13 +586,13 @@ export default fp(async (fastify) => {
           return;
         }
 
-        const receiverSockets = await getSocketsForUser(receiverId);
+        const receiverSockets = getSocketsForUser(receiverId);
         if (!receiverSockets || receiverSockets.size === 0) {
           return;
         }
 
         const isTURNRelay =
-          (await candidate.candidate?.includes("typ relay")) ?? false;
+          (candidate.candidate?.includes("typ relay")) ?? false;
 
         if (
           senderCall.status === "in_call" &&
@@ -596,7 +603,7 @@ export default fp(async (fastify) => {
         } else {
           // Buffer ICE candidate - will be flushed when receiver sets remote description
           // CRITICAL: Always buffer during "calling" phase to ensure proper timing
-          const buffer = await getIceCandidateBuffer(receiverId, senderId);
+          const buffer = getIceCandidateBuffer(receiverId, senderId);
           buffer.push({
             candidate,
             timestamp: Date.now(),
@@ -622,16 +629,16 @@ export default fp(async (fastify) => {
         callerId: string;
         receiverId: string;
       }) => {
-        await activeCalls.delete(callerId);
-        await activeCalls.delete(receiverId);
+        activeCalls.delete(callerId);
+        activeCalls.delete(receiverId);
 
         // Clear ICE buffers
-        await clearIceCandidateBuffer(callerId, receiverId);
+        clearIceCandidateBuffer(callerId, receiverId);
 
         // Update call history status to DECLINED
-        const callId = await getCallHistoryForPair(callerId, receiverId);
+        const callId = getCallHistoryForPair(callerId, receiverId);
         if (callId) {
-          await updateCallHistory(
+          updateCallHistory(
             fastify.prisma as PrismaClient | undefined,
             callId,
             "DECLINED",
@@ -644,7 +651,7 @@ export default fp(async (fastify) => {
         }
 
         // Emit to all sockets of the caller
-        const callerSockets = await getSocketsForUser(callerId);
+        const callerSockets = getSocketsForUser(callerId);
         if (callerSockets && callerSockets.size > 0) {
           io.to(callerId).emit("call_declined", { receiverId });
         }
@@ -852,13 +859,13 @@ export default fp(async (fastify) => {
         callType: CallType;
         callerInfo: any;
       }) => {
-        const senderId = await getUserId();
+        const senderId = getUserId();
         if (!senderId || !receiverId) return;
 
         const bufferKey1 = `${receiverId}-${senderId}`;
         const bufferKey2 = `${senderId}-${receiverId}`;
-        await iceCandidateBuffers.delete(bufferKey1);
-        await iceCandidateBuffers.delete(bufferKey2);
+        iceCandidateBuffers.delete(bufferKey1);
+        iceCandidateBuffers.delete(bufferKey2);
 
         io.to(receiverId).emit("call_offer_resend", {
           callerId: senderId,
@@ -950,12 +957,11 @@ export default fp(async (fastify) => {
 
       // Only remove user from conversation rooms if this was their last socket
       if (remainingCount === 0) {
-        // Remove user from all conversation rooms
-        for (const [conversationId, room] of conversationRooms.entries()) {
-          if (room.has(userId)) {
-            leaveConversationRoom(userId, conversationId);
-          }
-        }
+        // Remove user from all conversation rooms - O(k) where k = user's rooms, not O(n) all rooms
+        const userConversationIds = getUserConversationRooms(userId);
+        userConversationIds.forEach(conversationId => {
+          leaveConversationRoom(userId, conversationId);
+        });
       }
 
       if (activeCalls.has(userId)) {

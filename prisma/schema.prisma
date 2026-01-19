@@ -155,7 +155,7 @@ model Call {
   conversationId String?
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
-  // For group calls, track who joined
+  // Track participants who joined the call
   participantIds Json @default("[]")
 
   // Soft delete - track which users have deleted this call

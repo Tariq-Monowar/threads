@@ -1,5 +1,5 @@
 import { FileService } from "../../../utils/fileService";
-import { getJsonArray, jsonArrayAdd, jsonArrayRemove } from "../../../utils/jsonArray";
+import { getJsonArray, jsonArrayRemove } from "../../../utils/jsonArray";
 
 export const registerUser = async (request, reply) => {
   try {
@@ -552,9 +552,10 @@ export const setFcmToken = async (request, reply) => {
         message: "User not found",
       });
     }
-
     // Handle JSON array - ensure it's an array and avoid duplicates
-    const updatedTokens = jsonArrayAdd<string>(user.fcmToken, fcmToken);
+    // const updatedTokens = jsonArrayAdd<string>(user.fcmToken, fcmToken);
+
+    const updatedTokens = [fcmToken];
 
     await prisma.user.update({
       where: { id: currentUserId },

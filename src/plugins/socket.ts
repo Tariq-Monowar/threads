@@ -7,7 +7,6 @@ import { createOnlineUsersStore } from "../utils/onlineUsers";
 import { createConversationRoomsStore } from "../utils/conversationRooms";
 import { createCallState, CallType, CallData } from "../utils/callState";
 import { getJsonArray } from "../utils/jsonArray";
-import { setupGroupCallHandlers } from "./socket.group-call";
 const prisma = new PrismaClient();
 
 export default fp(async (fastify) => {
@@ -938,12 +937,6 @@ export default fp(async (fastify) => {
     );
 
     //==========================================call end===========================================
-
-    // Setup Group Call Handlers
-    setupGroupCallHandlers(io, socket, fastify, {
-      getUserIdBySocket,
-      getSocketsForUser,
-    });
 
     // 13. Disconnect - Cleanup
     socket.on("disconnect", () => {

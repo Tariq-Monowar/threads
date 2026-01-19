@@ -7,13 +7,13 @@
  * Safely get an array from a JSON field
  */
 export function getJsonArray<T>(value: any, defaultValue: T[] = []): T[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (value === null || value === undefined) {
-    return defaultValue;
-  }
-  // If it's a string, try to parse it
+  // Already an array
+  if (Array.isArray(value)) return value;
+  
+  // Null or undefined
+  if (value == null) return defaultValue;
+  
+  // Try parsing string
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
@@ -22,6 +22,8 @@ export function getJsonArray<T>(value: any, defaultValue: T[] = []): T[] {
       return defaultValue;
     }
   }
+  
+  // Any other type
   return defaultValue;
 }
 
@@ -29,8 +31,7 @@ export function getJsonArray<T>(value: any, defaultValue: T[] = []): T[] {
  * Check if a JSON array contains a value
  */
 export function jsonArrayContains<T>(jsonArray: any, value: T): boolean {
-  const array = getJsonArray<T>(jsonArray);
-  return array.includes(value);
+  return getJsonArray<T>(jsonArray).includes(value);
 }
 
 /**
@@ -38,17 +39,12 @@ export function jsonArrayContains<T>(jsonArray: any, value: T): boolean {
  */
 export function jsonArrayAdd<T>(jsonArray: any, value: T): T[] {
   const array = getJsonArray<T>(jsonArray);
-  if (!array.includes(value)) {
-    return [...array, value];
-  }
-  return array;
+  return array.includes(value) ? array : [...array, value];
 }
 
 /**
  * Remove a value from a JSON array
  */
 export function jsonArrayRemove<T>(jsonArray: any, value: T): T[] {
-  const array = getJsonArray<T>(jsonArray);
-  return array.filter((item) => item !== value);
+  return getJsonArray<T>(jsonArray).filter((item) => item !== value);
 }
-

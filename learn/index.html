@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Group Call (Threads)</title>
+    <script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+    <script type="module">
+        // Load mediasoup-client using Skypack (reliable ES module CDN)
+        import * as mediasoupClient from 'https://cdn.skypack.dev/mediasoup-client@3.6.92';
+        window.mediasoupClient = mediasoupClient;
+        console.log('✅ mediasoup-client loaded via Skypack');
+        
+        // Also set a flag so other scripts know it's ready
+        window.mediasoupClientReady = true;
+        window.dispatchEvent(new Event('mediasoupClientReady'));
+    </script>
+    <script>
+        // Wait for mediasoup-client to be ready (for non-module code)
+        if (!window.mediasoupClient) {
+            window.addEventListener('mediasoupClientReady', function() {
+                console.log('mediasoup-client is now available');
+            });
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-top: 10px;
+        }
+
+        .status.connected {
+            background: #10b981;
+            color: white;
+        }
+
+        .status.disconnected {
+            background: #ef4444;
+            color: white;
+        }
+
+        .status.in-call {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .setup-section {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .setup-section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .users-list {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .users-list h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .user-item {
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-item:hover {
+            background: #f9fafb;
+        }
+
+        .video-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+
+        .video-section.active {
+            display: block;
+        }
+
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .video-container video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+            display: block;
+        }
+        
+        .video-container video:not([src]):not([srcObject]) {
+            background: #1a1a1a;
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .video-controls {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .control-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        .control-btn.muted {
+            background: #ef4444;
+        }
+
+        .control-btn.video-off {
+            background: #6b7280;
+        }
+
+        .controls-bar {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            padding: 20px;
+            background: #f9fafb;
+            border-radius: 12px;
+            margin-top: 20px;
+        }
+
+        .controls-bar .btn {
+            min-width: 120px;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+        }
+
+        .incoming-call {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .incoming-call h3 {
+            color: #667eea;
+            margin-bottom: 12px;
+        }
+
+        .incoming-call p {
+            margin-bottom: 16px;
+            color: #555;
+        }
+
+        .group-call-join {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .group-call-join.active {
+            display: flex;
+        }
+
+        .group-call-join span {
+            font-weight: 600;
+        }
+
+        .group-call-join .btn-join {
+            padding: 8px 20px;
+            background: white;
+            color: #059669;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .group-call-join .btn-join:hover {
+            background: #f0fdf4;
+        }
+
+        @media (max-width: 768px) {
+            .video-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Group Call (Threads)</h1>
+            <div class="status disconnected" id="status">Disconnected</div>
+        </div>
+
+        <div class="setup-section" id="setupSection">
+            <h2>Setup</h2>
+            <div class="form-group">
+                <label for="serverUrl">Server URL</label>
+                <input type="text" id="serverUrl" placeholder="http://localhost:8000" value="http://localhost:8000">
+            </div>
+            <div class="form-group">
+                <label for="userId">Your User ID</label>
+                <input type="text" id="userId" placeholder="e.g. 1" value="1">
+            </div>
+            <div class="form-group">
+                <label for="username">Your Name</label>
+                <input type="text" id="username" placeholder="Display name" value="User">
+            </div>
+            <div class="form-group">
+                <label for="conversationId">Conversation ID (group)</label>
+                <input type="text" id="conversationId" placeholder="Same for all participants" value="">
+            </div>
+            <div class="form-group">
+                <label for="audioDeviceSelect">Microphone</label>
+                <select id="audioDeviceSelect">
+                    <option value="">Default</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="videoDeviceSelect">Camera</label>
+                <select id="videoDeviceSelect">
+                    <option value="">Default</option>
+                </select>
+            </div>
+            <button class="btn btn-secondary" onclick="refreshDeviceList()" style="margin-bottom: 10px;">Refresh devices</button>
+            <button class="btn btn-primary" onclick="connect()">Connect</button>
+            <button class="btn btn-primary" id="btnStartGroupCall" onclick="startGroupCall()" disabled>Start group call</button>
+            <div class="error" id="error"></div>
+        </div>
+
+        <div class="incoming-call" id="incomingCallSection" style="display: none;">
+            <h3>Incoming group call</h3>
+            <p id="incomingCallFrom"></p>
+            <button class="btn btn-primary" onclick="acceptGroupCall()">Accept</button>
+            <button class="btn btn-danger" onclick="declineGroupCall()">Decline</button>
+        </div>
+
+        <div class="group-call-join" id="groupCallJoinSection">
+            <span>📞 Group call in progress – you can join</span>
+            <button type="button" class="btn-join" id="btnJoinGroupCall" onclick="joinActiveGroupCall()">Join</button>
+        </div>
+
+        <div class="video-section" id="videoSection">
+            <h2 style="color: #667eea; margin-bottom: 20px;">Video Call</h2>
+            <div class="video-grid" id="videoGrid"></div>
+            <div class="controls-bar">
+                <button class="btn btn-primary" id="toggleAudio" onclick="toggleAudio()">
+                    🔊 Unmute
+                </button>
+                <button class="btn btn-primary" id="toggleVideo" onclick="toggleVideo()">
+                    📹 Video On
+                </button>
+                <button class="btn btn-danger" onclick="leaveRoom()">Leave Call</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration — threads backend (group call)
+        function getServerUrl() {
+            const el = document.getElementById('serverUrl');
+            return (el && el.value && el.value.trim()) ? el.value.trim() : 'http://localhost:8000';
+        }
+        let socket = null;
+        let device = null;
+        let pendingGroupCall = null; // { callerId, conversationId, callType, callerInfo }
+        let activeGroupCallConversationId = null; // conversationId that has an active call (show "you can join")
+
+        // Wait for mediasoup-client to load
+        function waitForMediasoupClient() {
+            return new Promise((resolve, reject) => {
+                // If already ready, resolve immediately
+                if (window.mediasoupClient && window.mediasoupClient.Device) {
+                    resolve();
+                    return;
+                }
+                
+                // Wait for the ready event
+                const onReady = () => {
+                    if (window.mediasoupClient && window.mediasoupClient.Device) {
+                        resolve();
+                    }
+                };
+                
+                window.addEventListener('mediasoupClientReady', onReady);
+                
+                // Also poll as fallback
+                let attempts = 0;
+                const maxAttempts = 100; // 10 seconds
+                
+                const check = () => {
+                    const mediasoup = window.mediasoupClient;
+                    if (mediasoup && mediasoup.Device) {
+                        window.removeEventListener('mediasoupClientReady', onReady);
+                        resolve();
+                    } else if (attempts < maxAttempts) {
+                        attempts++;
+                        setTimeout(check, 100);
+                    } else {
+                        window.removeEventListener('mediasoupClientReady', onReady);
+                        reject(new Error(
+                            'mediasoup-client failed to load after 10 seconds. ' +
+                            'This might be due to:\n' +
+                            '1. Network connectivity issues\n' +
+                            '2. CORS restrictions\n' +
+                            '3. Browser blocking the CDN\n\n' +
+                            'Please refresh the page or check the browser console.'
+                        ));
+                    }
+                };
+                
+                check();
+            });
+        }
+        let sendTransport = null;
+        let recvTransport = null;
+        let recvTransportConnected = false; // Track recv transport connection state
+        let producers = new Map();
+        let consumers = new Map();
+        let producerToSocket = new Map(); // Track which producer belongs to which socket
+        let socketToStream = new Map(); // Track streams per socket (to combine audio/video)
+        let localStream = null;
+        let currentRoomId = null;
+        let isAudioEnabled = true;
+        let isVideoEnabled = true;
+
+        // Helper function to check device availability
+        async function checkDeviceAvailability() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const hasVideo = devices.some(d => d.kind === 'videoinput');
+                const hasAudio = devices.some(d => d.kind === 'audioinput');
+                return { hasVideo, hasAudio, devices };
+            } catch (error) {
+                console.warn('Could not enumerate devices:', error);
+                return { hasVideo: true, hasAudio: true, devices: [] };
+            }
+        }
+
+        // Populate microphone and camera dropdowns (flexible: works with one or many devices)
+        async function refreshDeviceList() {
+            const audioSelect = document.getElementById('audioDeviceSelect');
+            const videoSelect = document.getElementById('videoDeviceSelect');
+            if (!audioSelect || !videoSelect) return;
+            try {
+                let devices = await navigator.mediaDevices.enumerateDevices();
+                // If labels are empty, get permission first so we can show names
+                if (devices.length > 0 && !devices[0].label) {
+                    try {
+                        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                        tempStream.getTracks().forEach(t => t.stop());
+                        devices = await navigator.mediaDevices.enumerateDevices();
+                    } catch (_) { /* use devices as-is */ }
+                }
+                const audioDevices = devices.filter(d => d.kind === 'audioinput');
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
+                audioSelect.innerHTML = '<option value="">Default</option>';
+                audioDevices.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || `Microphone ${i + 1}`;
+                    audioSelect.appendChild(opt);
+                });
+                videoSelect.innerHTML = '<option value="">Default</option>';
+                videoDevices.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || `Camera ${i + 1}`;
+                    videoSelect.appendChild(opt);
+                });
+                // If only one device, preselect it
+                if (audioDevices.length === 1) audioSelect.value = audioDevices[0].deviceId;
+                if (videoDevices.length === 1) videoSelect.value = videoDevices[0].deviceId;
+            } catch (e) {
+                console.warn('Could not refresh device list:', e);
+            }
+        }
+
+        function getUserId() {
+            return (document.getElementById('userId') && document.getElementById('userId').value) || '';
+        }
+
+        function getConversationId() {
+            return (document.getElementById('conversationId') && document.getElementById('conversationId').value) || '';
+        }
+
+        function updateGroupCallJoinVisibility() {
+            const el = document.getElementById('groupCallJoinSection');
+            if (!el) return;
+            const convId = getConversationId();
+            const alreadyInCall = currentRoomId === activeGroupCallConversationId;
+            if (activeGroupCallConversationId && convId && activeGroupCallConversationId === convId && !alreadyInCall) {
+                el.classList.add('active');
+            } else {
+                el.classList.remove('active');
+            }
+        }
+
+        function joinActiveGroupCall() {
+            if (!activeGroupCallConversationId) return;
+            joinRoom(activeGroupCallConversationId);
+            document.getElementById('groupCallJoinSection').classList.remove('active');
+        }
+
+        // Connect to backend and register as user (do not join room yet)
+        async function connect() {
+            try {
+                const userId = getUserId();
+                if (!userId) {
+                    showError('Please enter your User ID');
+                    return;
+                }
+
+                // Clean up any existing streams
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                const deviceCheck = await checkDeviceAvailability();
+                if (!deviceCheck.hasVideo && !deviceCheck.hasAudio) {
+                    showError('No camera or microphone found. Please connect a device and refresh the page.');
+                    return;
+                }
+
+                socket = io(getServerUrl());
+                updateStatus('connecting');
+
+                socket.on('connect', () => {
+                    console.log('Socket connected');
+                    socket.emit('join', userId);
+                    updateStatus('connected');
+                    document.getElementById('btnStartGroupCall').disabled = false;
+                });
+
+                socket.on('disconnect', () => {
+                    console.log('Socket disconnected');
+                    updateStatus('disconnected');
+                    document.getElementById('btnStartGroupCall').disabled = true;
+                });
+
+                socket.on('group_call_error', (data) => {
+                    showError(data.message || 'Group call failed');
+                });
+
+                socket.on('group_call_incoming', (data) => {
+                    pendingGroupCall = data;
+                    document.getElementById('incomingCallFrom').textContent =
+                        (data.callerInfo && data.callerInfo.name) ? data.callerInfo.name + ' is calling this group' : 'Incoming group call';
+                    document.getElementById('incomingCallSection').style.display = 'block';
+                });
+
+                socket.on('group_call_started', (data) => {
+                    activeGroupCallConversationId = data.conversationId || null;
+                    updateGroupCallJoinVisibility();
+                });
+
+                socket.on('group_call_ended', (data) => {
+                    if (activeGroupCallConversationId === (data.conversationId || null)) {
+                        activeGroupCallConversationId = null;
+                    }
+                    updateGroupCallJoinVisibility();
+                });
+
+                socket.on('newProducer', async ({ producerId, kind, socketId }) => {
+                    if (!socket || socketId === socket.id) return;
+                    let retries = 0;
+                    while ((!recvTransport || !device || !device.loaded) && retries < 15) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        retries++;
+                    }
+                    if (!recvTransport || !device || !device.loaded) {
+                        console.error('Not ready for producer ' + producerId);
+                        return;
+                    }
+                    producerToSocket.set(producerId, socketId);
+                    try {
+                        await consumeProducer(producerId, kind);
+                    } catch (error) {
+                        console.error('Failed to consume producer ' + producerId, error);
+                    }
+                });
+
+                socket.on('participantLeft', ({ socketId }) => {
+                    removeParticipant(socketId);
+                });
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                showError('Failed to connect: ' + error.message);
+            }
+        }
+
+        // Start group call: notify all members, then join the mediasoup room
+        async function startGroupCall() {
+            const userId = getUserId();
+            const conversationId = getConversationId();
+            const username = document.getElementById('username').value;
+            if (!userId || !conversationId) {
+                showError('Enter User ID and Conversation ID');
+                return;
+            }
+            socket.emit('group_call_initiate', {
+                callerId: userId,
+                conversationId: conversationId,
+                callType: 'video',
+                callerName: username || 'User',
+                callerAvatar: null
+            });
+            await joinRoom(conversationId);
+        }
+
+        async function acceptGroupCall() {
+            if (!pendingGroupCall) return;
+            const conversationId = pendingGroupCall.conversationId;
+            document.getElementById('incomingCallSection').style.display = 'none';
+            pendingGroupCall = null;
+            await joinRoom(conversationId);
+        }
+
+        function declineGroupCall() {
+            document.getElementById('incomingCallSection').style.display = 'none';
+            pendingGroupCall = null;
+        }
+
+        async function joinRoom(roomId) {
+            try {
+                currentRoomId = roomId;
+                updateStatus('in-call');
+
+                // Wait for mediasoup-client to be available
+                await waitForMediasoupClient();
+
+                // Create or join room
+                const { rtpCapabilities } = await socketRequest('createRoom', { roomId });
+                console.log('Room joined, RTP capabilities:', rtpCapabilities);
+
+                // Get mediasoupClient reference
+                const mediasoup = window.mediasoupClient || mediasoupClient || window.mediasoup;
+                if (!mediasoup) {
+                    throw new Error('mediasoup-client library not loaded. Please refresh the page.');
+                }
+
+                // Create mediasoup device
+                device = new mediasoup.Device();
+                await device.load({ routerRtpCapabilities: rtpCapabilities });
+                console.log('Device loaded');
+
+                // Create transports in parallel for faster connection
+                await Promise.all([
+                    createSendTransport(),
+                    createRecvTransport()
+                ]);
+
+                // Optimized: Minimal wait (100ms instead of 800ms)
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Start producing local media
+                await produceMedia();
+                
+                // Optimized: Minimal wait (100ms instead of 500ms)
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Get existing producers and consume in parallel
+                const { producers: existingProducers } = await socketRequest('getProducers');
+
+                // Consume existing producers in parallel for faster connection
+                if (recvTransport && device && device.loaded) {
+                    const consumePromises = existingProducers
+                        .filter(producer => producer.socketId !== socket.id)
+                        .map(async (producer) => {
+                            producerToSocket.set(producer.id, producer.socketId);
+                            try {
+                                await consumeProducer(producer.id, producer.kind);
+                            } catch (error) {
+                                console.error(`❌ Failed to consume producer ${producer.id}:`, error);
+                            }
+                        });
+                    await Promise.all(consumePromises);
+                }
+
+                // Initialize button states
+                document.getElementById('toggleAudio').textContent = '🔊 Unmute';
+                document.getElementById('toggleVideo').textContent = '📹 Video On';
+
+                // Show video section
+                document.getElementById('setupSection').style.display = 'none';
+                document.getElementById('videoSection').classList.add('active');
+                document.getElementById('incomingCallSection').style.display = 'none';
+
+            } catch (error) {
+                console.error('Join room error:', error);
+                showError('Failed to join room: ' + error.message);
+            }
+        }
+
+        async function createSendTransport() {
+            const { id, iceParameters, iceCandidates, dtlsParameters } = await socketRequest('createTransport', { type: 'send' });
+
+            sendTransport = device.createSendTransport({
+                id,
+                iceParameters,
+                iceCandidates,
+                dtlsParameters,
+            });
+
+            sendTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                try {
+                    console.log('Connecting send transport...');
+                    await socketRequest('connectTransport', {
+                        transportId: sendTransport.id,
+                        dtlsParameters,
+                    });
+                    console.log('✅ Send transport connected');
+                    callback();
+                } catch (error) {
+                    console.error('❌ Send transport connection error:', error);
+                    errback(error);
+                }
+            });
+
+            sendTransport.on('connectionstatechange', (state) => {
+                console.log('Send transport connection state:', state);
+            });
+
+            sendTransport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
+                try {
+                    console.log(`Producing ${kind}...`);
+                    const { id } = await socketRequest('produce', {
+                        transportId: sendTransport.id,
+                        kind,
+                        rtpParameters,
+                    });
+                    console.log(`✅ Producer created: ${id} (${kind})`);
+                    callback({ id });
+                } catch (error) {
+                    console.error('❌ Produce error:', error);
+                    errback(error);
+                }
+            });
+        }
+
+        async function createRecvTransport() {
+            const { id, iceParameters, iceCandidates, dtlsParameters } = await socketRequest('createTransport', { type: 'recv' });
+
+            recvTransport = device.createRecvTransport({
+                id,
+                iceParameters,
+                iceCandidates,
+                dtlsParameters,
+            });
+
+            recvTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                try {
+                    console.log('Connecting recv transport...');
+                    await socketRequest('connectTransport', {
+                        transportId: recvTransport.id,
+                        dtlsParameters,
+                    });
+                    recvTransportConnected = true;
+                    recvTransport._connected = true;
+                    console.log('✅ Recv transport connected, state:', recvTransport.connectionState);
+                    callback();
+                } catch (error) {
+                    console.error('❌ Recv transport connection error:', error);
+                    recvTransportConnected = false;
+                    recvTransport._connected = false;
+                    errback(error);
+                }
+            });
+
+            recvTransport.on('connectionstatechange', (state) => {
+                console.log(`📡 Recv transport connection state: ${state}`);
+                if (state === 'connected' || state === 'completed') {
+                    recvTransportConnected = true;
+                    recvTransport._connected = true;
+                } else if (state === 'failed' || state === 'disconnected') {
+                    recvTransportConnected = false;
+                    recvTransport._connected = false;
+                    console.error('Recv transport connection failed or disconnected');
+                }
+            });
+        }
+
+        // Check permission state before requesting
+        async function checkPermissions() {
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const cameraPermission = await navigator.permissions.query({ name: 'camera' }).catch(() => null);
+                    const microphonePermission = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+                    
+                    if (cameraPermission && cameraPermission.state === 'denied') {
+                        return { denied: true, reason: 'Camera permission was denied. Please enable it in browser settings.' };
+                    }
+                    if (microphonePermission && microphonePermission.state === 'denied') {
+                        return { denied: true, reason: 'Microphone permission was denied. Please enable it in browser settings.' };
+                    }
+                }
+                return { denied: false };
+            } catch (e) {
+                // Permissions API not supported, continue anyway
+                return { denied: false };
+            }
+        }
+
+        async function produceMedia() {
+            // Clean up any existing stream first (important for Edge)
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    track.stop();
+                });
+                localStream = null;
+            }
+
+            // Wait a bit for device to be released (especially for Edge)
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Check permissions first
+            const permissionCheck = await checkPermissions();
+            if (permissionCheck.denied) {
+                showError(permissionCheck.reason);
+                throw new Error('Permission denied');
+            }
+
+            // Check if getUserMedia is available
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                const error = new Error('getUserMedia is not supported in this browser');
+                showError(error.message);
+                throw error;
+            }
+
+            let stream = null;
+            let lastError = null;
+
+            // Use selected devices from dropdowns (flexible: works with one or many devices, audio-only or video-only)
+            const deviceCheck = await checkDeviceAvailability();
+            const audioSelect = document.getElementById('audioDeviceSelect');
+            const videoSelect = document.getElementById('videoDeviceSelect');
+            const selectedAudioId = audioSelect && audioSelect.value ? audioSelect.value : null;
+            const selectedVideoId = videoSelect && videoSelect.value ? videoSelect.value : null;
+
+            const audioConstraint = deviceCheck.hasAudio ? {
+                ...(selectedAudioId && { deviceId: { exact: selectedAudioId } }),
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            } : false;
+            const videoConstraint = deviceCheck.hasVideo ? {
+                ...(selectedVideoId && { deviceId: { exact: selectedVideoId } }),
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 30, max: 60 }
+            } : false;
+
+            // Try with ideal constraints first
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: audioConstraint,
+                    video: videoConstraint
+                });
+            } catch (error) {
+                lastError = error;
+                
+                // If permission denied, stop immediately - don't retry
+                if (error.name === 'NotAllowedError') {
+                    showError('Permission denied. Please allow camera/microphone access and try again.');
+                    throw error;
+                }
+                
+                // If device not found, stop immediately
+                if (error.name === 'NotFoundError') {
+                    showError('No camera/microphone found. Please connect a device and try again.');
+                    throw error;
+                }
+                
+                // If overconstrained, try with basic constraints
+                if (error.name === 'OverconstrainedError' || error.name === 'NotReadableError') {
+                    console.warn('⚠️ Trying with basic constraints...');
+                    const basicAudio = deviceCheck.hasAudio ? (selectedAudioId ? { deviceId: { exact: selectedAudioId } } : true) : false;
+                    const basicVideo = deviceCheck.hasVideo ? (selectedVideoId ? { deviceId: { exact: selectedVideoId } } : true) : false;
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            audio: basicAudio,
+                            video: basicVideo
+                        });
+                    } catch (fallbackError) {
+                        lastError = fallbackError;
+                        
+                        // If still permission denied, stop
+                        if (fallbackError.name === 'NotAllowedError') {
+                            showError('Permission denied. Please allow camera/microphone access and try again.');
+                            throw fallbackError;
+                        }
+                        
+                        // If device in use, wait and retry once more
+                        if (fallbackError.name === 'NotReadableError') {
+                            console.warn('⚠️ Device in use, waiting 1 second before final attempt...');
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            try {
+                                stream = await navigator.mediaDevices.getUserMedia({ audio: basicAudio, video: basicVideo });
+                            } catch (finalError) {
+                                showError('Device is in use by another application. Please close other apps using the camera/microphone and refresh the page.');
+                                throw finalError;
+                            }
+                        } else {
+                            throw fallbackError;
+                        }
+                    }
+                } else {
+                    throw error;
+                }
+            }
+
+            if (!stream) {
+                const error = new Error('Failed to get media stream');
+                showError(error.message);
+                throw error;
+            }
+
+            try {
+                localStream = stream;
+                addLocalVideo(stream);
+
+                // Produce audio
+                const audioTrack = stream.getAudioTracks()[0];
+                if (audioTrack) {
+                    const audioProducer = await sendTransport.produce({ track: audioTrack });
+                    producers.set('audio', audioProducer);
+                    producers.set(audioProducer.id, audioProducer);
+                    console.log(`✅ Audio producer created: ${audioProducer.id}`);
+                }
+
+                // Produce video
+                const videoTrack = stream.getVideoTracks()[0];
+                if (videoTrack) {
+                    const videoProducer = await sendTransport.produce({ track: videoTrack });
+                    producers.set('video', videoProducer);
+                    producers.set(videoProducer.id, videoProducer);
+                    console.log(`✅ Video producer created: ${videoProducer.id}`);
+                }
+
+            } catch (error) {
+                // Clean up stream if production fails
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+                console.error('Error producing media:', error);
+                showError('Failed to start media production: ' + error.message);
+                throw error;
+            }
+        }
+
+        async function consumeProducer(producerId, kind = null) {
+            try {
+                if (consumers.has(producerId)) return;
+
+                if (!recvTransport || !device || !device.loaded) {
+                    throw new Error('Not ready');
+                }
+
+                const socketId = producerToSocket.get(producerId);
+                if (socketId === socket.id) return;
+
+                // Optimized: Faster retries (max 300ms instead of 2000ms)
+                let retries = 0;
+                while (
+                    recvTransport.connectionState !== 'connected' &&
+                    recvTransport.connectionState !== 'completed' &&
+                    retries < 6
+                ) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    retries++;
+                }
+                
+                // Request consumer creation from server
+                const { id, producerId: prodId, kind: mediaKind, rtpParameters } = await socketRequest('consume', {
+                    transportId: recvTransport.id,
+                    producerId,
+                    rtpCapabilities: device.rtpCapabilities,
+                });
+
+                // Create consumer
+                const consumer = await recvTransport.consume({
+                    id,
+                    producerId: prodId,
+                    kind: mediaKind,
+                    rtpParameters,
+                });
+
+                consumers.set(producerId, consumer);
+                consumer.track.enabled = true;
+
+                // Resume consumer (non-blocking)
+                socketRequest('resumeConsumer', { consumerId: consumer.id }).catch(() => {});
+
+                // Get track and add to video element immediately
+                const { track } = consumer;
+                if (!track) throw new Error('Consumer has no track');
+                
+                // Monitor track state (minimal)
+                track.onended = () => {
+                    const socketId = producerToSocket.get(producerId);
+                    if (socketId) {
+                        const stream = socketToStream.get(socketId);
+                        if (stream) stream.removeTrack(track);
+                    }
+                };
+                
+                // Add track to video element immediately (no waiting)
+                await addRemoteVideo(track, producerId, mediaKind);
+
+            } catch (error) {
+                console.error('Error consuming producer:', error);
+                // Don't show error to user for every failed consume, just log it
+                console.error(`Failed to consume producer ${producerId}: ${error.message}`);
+            }
+        }
+
+        function addLocalVideo(stream) {
+            const videoGrid = document.getElementById('videoGrid');
+            const videoContainer = document.createElement('div');
+            videoContainer.className = 'video-container';
+            videoContainer.id = 'local-video';
+
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+
+            const label = document.createElement('div');
+            label.className = 'video-label';
+            label.textContent = 'You (Local)';
+
+            videoContainer.appendChild(video);
+            videoContainer.appendChild(label);
+            videoGrid.appendChild(videoContainer);
+        }
+
+        async function addRemoteVideo(track, producerId, kind) {
+            const socketId = producerToSocket.get(producerId);
+            if (!socketId) return;
+
+            const videoGrid = document.getElementById('videoGrid');
+            let stream = socketToStream.get(socketId);
+            
+            if (!stream) {
+                stream = new MediaStream();
+                socketToStream.set(socketId, stream);
+            }
+            
+            if (!stream.getTracks().find(t => t.id === track.id)) {
+                stream.addTrack(track);
+            }
+            
+            track.enabled = true;
+            
+            // Get or create video container
+            let videoContainer = document.getElementById(`remote-${socketId}`);
+            let video = document.getElementById(`video-${socketId}`);
+            
+            if (!videoContainer) {
+                videoContainer = document.createElement('div');
+                videoContainer.className = 'video-container';
+                videoContainer.id = `remote-${socketId}`;
+                videoGrid.appendChild(videoContainer);
+            }
+
+            if (!video) {
+                video = document.createElement('video');
+                video.id = `video-${socketId}`;
+                video.autoplay = true;
+                video.playsInline = true;
+                video.muted = false;
+                video.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;background:#000';
+                
+                const label = document.createElement('div');
+                label.className = 'video-label';
+                label.textContent = 'Participant';
+                
+                videoContainer.appendChild(video);
+                videoContainer.appendChild(label);
+            }
+
+            // Set stream immediately (no delays)
+            video.srcObject = stream;
+            video.play().catch(() => {}); // Non-blocking play attempt
+        }
+
+        function removeParticipant(socketId) {
+            // Find all producers for this socket and remove their consumers
+            const producersToRemove = [];
+            for (const [producerId, sId] of producerToSocket.entries()) {
+                if (sId === socketId) {
+                    producersToRemove.push(producerId);
+                }
+            }
+
+            // Remove consumers
+            for (const producerId of producersToRemove) {
+                const consumer = consumers.get(producerId);
+                if (consumer) {
+                    consumer.close();
+                    consumers.delete(producerId);
+                }
+                producerToSocket.delete(producerId);
+            }
+            
+            // Remove stream tracking
+            socketToStream.delete(socketId);
+            
+            // Remove video element
+            const videoContainer = document.getElementById(`remote-${socketId}`);
+            if (videoContainer) {
+                videoContainer.remove();
+            }
+        }
+
+        async function toggleAudio() {
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    isAudioEnabled = !isAudioEnabled;
+                    audioTrack.enabled = isAudioEnabled;
+                    
+                    const btn = document.getElementById('toggleAudio');
+                    btn.textContent = isAudioEnabled ? '🔊 Unmute' : '🔇 Mute';
+                    btn.classList.toggle('muted', !isAudioEnabled);
+                }
+            }
+        }
+
+        async function toggleVideo() {
+            if (localStream) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    isVideoEnabled = !isVideoEnabled;
+                    videoTrack.enabled = isVideoEnabled;
+                    
+                    const btn = document.getElementById('toggleVideo');
+                    btn.textContent = isVideoEnabled ? '📹 Video On' : '📷 Video Off';
+                    btn.classList.toggle('video-off', !isVideoEnabled);
+
+                    // Toggle local video display
+                    const localVideo = document.querySelector('#local-video video');
+                    if (localVideo) {
+                        localVideo.style.display = isVideoEnabled ? 'block' : 'none';
+                    }
+                }
+            }
+        }
+
+        async function leaveRoom() {
+            try {
+                // Stop local stream first (important for Edge)
+                if (localStream) {
+                    localStream.getTracks().forEach(track => {
+                        track.stop();
+                        track.enabled = false;
+                    });
+                    localStream = null;
+                }
+                
+                // Wait a bit for device to be released (especially for Edge)
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                // Close producers
+                for (const producer of producers.values()) {
+                    producer.close();
+                }
+                producers.clear();
+
+                // Close consumers
+                for (const consumer of consumers.values()) {
+                    consumer.close();
+                }
+                consumers.clear();
+                producerToSocket.clear();
+                socketToStream.clear();
+
+                // Close transports
+                if (sendTransport) {
+                    sendTransport.close();
+                }
+                if (recvTransport) {
+                    recvTransport.close();
+                }
+
+                // Leave mediasoup room only (stay connected to backend)
+                if (socket) {
+                    socket.emit('leaveRoom');
+                }
+
+                // Reset UI
+                document.getElementById('videoSection').classList.remove('active');
+                document.getElementById('setupSection').style.display = 'block';
+                document.getElementById('videoGrid').innerHTML = '';
+                updateStatus('connected');
+
+            } catch (error) {
+                console.error('Error leaving room:', error);
+            }
+        }
+
+        function socketRequest(event, data = {}) {
+            return new Promise((resolve, reject) => {
+                if (!socket) {
+                    reject(new Error('Socket not connected'));
+                    return;
+                }
+
+                socket.emit(event, data, (response) => {
+                    if (response.error) {
+                        reject(new Error(response.error));
+                    } else {
+                        resolve(response);
+                    }
+                });
+            });
+        }
+
+        function updateStatus(status) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status ' + status;
+            
+            const statusText = {
+                'disconnected': 'Disconnected',
+                'connecting': 'Connecting...',
+                'connected': 'Connected',
+                'in-call': 'In Call'
+            };
+            
+            statusEl.textContent = statusText[status] || status;
+        }
+
+        function showError(message) {
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = message;
+            errorEl.classList.add('show');
+            setTimeout(() => {
+                errorEl.classList.remove('show');
+            }, 5000);
+        }
+
+        window.addEventListener('load', () => {
+            refreshDeviceList();
+        });
+    </script>
+</body>
+</html>

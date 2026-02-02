@@ -1,4 +1,5 @@
 import path from "path";
+
 import Fastify from "fastify";
 import AutoLoad from "@fastify/autoload";
 import cors from "@fastify/cors";
@@ -20,6 +21,7 @@ app.register(AutoLoad, {
 });
 
 app.register(routesV1, { prefix: "/api/v1" });
+
 
 app.register(fastifyStatic, {
   root: path.join(__dirname, "uploads"),

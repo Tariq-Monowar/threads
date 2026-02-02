@@ -30,6 +30,7 @@
     "firebase-admin": "^13.5.0",
     "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
+    "mediasoup": "^3.19.15",
     "mysql2": "^3.16.0",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.6",

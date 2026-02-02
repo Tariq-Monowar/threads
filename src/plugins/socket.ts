@@ -1,6 +1,8 @@
 import fp from "fastify-plugin";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
+import * as mediasoup from "mediasoup";
+import * as os from "os";
 import { saveCallHistory, updateCallHistory } from "../utils/callHistory";
 import { FileService } from "../utils/fileService";
 import { createOnlineUsersStore } from "../utils/onlineUsers";
@@ -9,16 +11,109 @@ import { createCallState, CallType, CallData } from "../utils/callState";
 import { getJsonArray } from "../utils/jsonArray";
 const prisma = new PrismaClient();
 
+// --- Mediasoup (group call / room) state ---
+type MediasoupParticipant = {
+  roomId: string;
+  router: mediasoup.types.Router;
+  transports: Map<string, mediasoup.types.WebRtcTransport>;
+  producers: Map<string, mediasoup.types.Producer>;
+  consumers: Map<string, mediasoup.types.Consumer>;
+};
+let mediasoupWorker: mediasoup.types.Worker | null = null;
+const mediasoupRooms = new Map<string, mediasoup.types.Router>();
+const mediasoupParticipants = new Map<string, MediasoupParticipant>();
+
+function getLocalIp(): string {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    if (!ifaces) continue;
+    for (const iface of ifaces) {
+      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+async function createMediasoupWorker(): Promise<mediasoup.types.Worker> {
+  if (mediasoupWorker) return mediasoupWorker;
+  mediasoupWorker = await mediasoup.createWorker({
+    logLevel: "warn",
+    rtcMinPort: 40000,
+    rtcMaxPort: 49999,
+  });
+  mediasoupWorker.on("died", () => {
+    console.error("[mediasoup] Worker died");
+    process.exit(1);
+  });
+  return mediasoupWorker;
+}
+
+async function getOrCreateMediasoupRouter(
+  roomId: string
+): Promise<mediasoup.types.Router> {
+  const existing = mediasoupRooms.get(roomId);
+  if (existing) return existing;
+  const worker = await createMediasoupWorker();
+  const router = await worker.createRouter({
+    mediaCodecs: [
+      {
+        kind: "audio",
+        mimeType: "audio/opus",
+        clockRate: 48000,
+        channels: 2,
+      },
+      { kind: "video", mimeType: "video/VP8", clockRate: 90000 },
+    ],
+  });
+  mediasoupRooms.set(roomId, router);
+  return router;
+}
+
+function getMediasoupProducersForRoom(
+  roomId: string
+): Array<{ id: string; kind: string; socketId: string }> {
+  const list: Array<{ id: string; kind: string; socketId: string }> = [];
+  for (const [socketId, p] of mediasoupParticipants) {
+    if (p.roomId !== roomId) continue;
+    for (const producer of p.producers.values()) {
+      list.push({
+        id: producer.id,
+        kind: producer.kind,
+        socketId,
+      });
+    }
+  }
+  return list;
+}
+
+function cleanupMediasoupParticipant(socketId: string): string | null {
+  const p = mediasoupParticipants.get(socketId);
+  if (!p) return null;
+  p.transports.forEach((t) => t.close());
+  mediasoupParticipants.delete(socketId);
+  const leftInRoom = [...mediasoupParticipants.values()].filter(
+    (x) => x.roomId === p.roomId
+  );
+  if (leftInRoom.length === 0) {
+    const r = mediasoupRooms.get(p.roomId);
+    if (r) {
+      r.close();
+      mediasoupRooms.delete(p.roomId);
+    }
+  }
+  return p.roomId;
+}
+
+function isMediasoupRoomEmpty(roomId: string): boolean {
+  return ![...mediasoupParticipants.values()].some((p) => p.roomId === roomId);
+}
+
 export default fp(async (fastify) => {
+  await createMediasoupWorker();
+  fastify.log.info("Mediasoup worker ready");
+
   const io = new Server(fastify.server, {
     cors: {
-      origin: [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:50468",
-        "http://localhost:4002",
-        "http://127.0.0.1:5500",
-      ],
+      origin: (_origin, callback) => callback(null, true),
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -945,19 +1040,390 @@ export default fp(async (fastify) => {
 
     //==========================================call end===========================================
 
+
+    //==========================================mediasoup Group Call (room / SFU)===========================================
+    socket.on(
+      "createRoom",
+      async (
+        { roomId }: { roomId: string },
+        cb: (arg: { rtpCapabilities?: mediasoup.types.RtpCapabilities; error?: string }) => void
+      ) => {
+        try {
+          if (!roomId) {
+            cb({ error: "roomId required" });
+            return;
+          }
+          const userId = getUserIdBySocket(socket.id);
+          if (!userId) {
+            cb({ error: "Join first with your user ID" });
+            return;
+          }
+          const isMember = await fastify.prisma.conversationMember.findFirst({
+            where: {
+              conversationId: roomId,
+              userId: Number(userId),
+              isDeleted: false,
+            },
+          });
+          if (!isMember) {
+            cb({ error: "You are not in this group" });
+            return;
+          }
+          const wasEmpty = isMediasoupRoomEmpty(roomId);
+          const router = await getOrCreateMediasoupRouter(roomId);
+          mediasoupParticipants.set(socket.id, {
+            roomId,
+            router,
+            transports: new Map(),
+            producers: new Map(),
+            consumers: new Map(),
+          });
+          socket.join(roomId);
+          if (wasEmpty) {
+            const members = await fastify.prisma.conversationMember.findMany({
+              where: { conversationId: roomId, isDeleted: false, userId: { not: null } },
+              select: { userId: true },
+            });
+            for (const m of members) {
+              if (m.userId) io.to(String(m.userId)).emit("group_call_started", { conversationId: roomId });
+            }
+          }
+          cb({ rtpCapabilities: router.rtpCapabilities });
+        } catch (err: any) {
+          cb({ error: err?.message || "createRoom failed" });
+        }
+      }
+    );
+
+    socket.on(
+      "createTransport",
+      async (
+        _payload: { type: string },
+        cb: (arg: {
+          id?: string;
+          iceParameters?: any;
+          iceCandidates?: any[];
+          dtlsParameters?: any;
+          error?: string;
+        }) => void
+      ) => {
+        try {
+          const p = mediasoupParticipants.get(socket.id);
+          if (!p) {
+            cb({ error: "Participant not found" });
+            return;
+          }
+          const announcedIp =
+            process.env.MEDIASOUP_ANNOUNCED_IP || getLocalIp();
+          const transport = await p.router.createWebRtcTransport({
+            listenIps: [{ ip: "0.0.0.0", announcedIp }],
+            enableUdp: true,
+            enableTcp: true,
+            preferUdp: true,
+          });
+          p.transports.set(transport.id, transport);
+          transport.on("dtlsstatechange", (state) => {
+            if (state === "closed") transport.close();
+          });
+          cb({
+            id: transport.id,
+            iceParameters: transport.iceParameters,
+            iceCandidates: transport.iceCandidates,
+            dtlsParameters: transport.dtlsParameters,
+          });
+        } catch (err: any) {
+          cb({ error: err?.message || "createTransport failed" });
+        }
+      }
+    );
+
+    socket.on(
+      "connectTransport",
+      async (
+        {
+          transportId,
+          dtlsParameters,
+        }: { transportId: string; dtlsParameters: any },
+        cb: (arg: { success?: boolean; error?: string }) => void
+      ) => {
+        try {
+          const p = mediasoupParticipants.get(socket.id);
+          const t = p?.transports.get(transportId);
+          if (!t) {
+            cb({ error: p ? "Transport not found" : "Participant not found" });
+            return;
+          }
+          await t.connect({ dtlsParameters });
+          cb({ success: true });
+        } catch (err: any) {
+          cb({ error: err?.message || "connectTransport failed" });
+        }
+      }
+    );
+
+    socket.on(
+      "produce",
+      async (
+        {
+          transportId,
+          kind,
+          rtpParameters,
+        }: { transportId: string; kind: string; rtpParameters: any },
+        cb: (arg: { id?: string; error?: string }) => void
+      ) => {
+        try {
+          const p = mediasoupParticipants.get(socket.id);
+          const t = p?.transports.get(transportId);
+          if (!t) {
+            cb({ error: p ? "Transport not found" : "Participant not found" });
+            return;
+          }
+          const producer = await t.produce({
+            kind: kind as mediasoup.types.MediaKind,
+            rtpParameters,
+          });
+          p!.producers.set(producer.id, producer);
+          socket.to(p!.roomId).emit("newProducer", {
+            producerId: producer.id,
+            kind: producer.kind,
+            socketId: socket.id,
+          });
+          cb({ id: producer.id });
+        } catch (err: any) {
+          cb({ error: err?.message || "produce failed" });
+        }
+      }
+    );
+
+    socket.on(
+      "consume",
+      async (
+        {
+          transportId,
+          producerId,
+          rtpCapabilities,
+        }: { transportId: string; producerId: string; rtpCapabilities: any },
+        cb: (arg: {
+          id?: string;
+          producerId?: string;
+          kind?: string;
+          rtpParameters?: any;
+          error?: string;
+        }) => void
+      ) => {
+        try {
+          const p = mediasoupParticipants.get(socket.id);
+          if (!p) {
+            cb({ error: "Participant not found" });
+            return;
+          }
+          let producer: mediasoup.types.Producer | undefined;
+          let producerSocketId: string | undefined;
+          for (const [sid, px] of mediasoupParticipants) {
+            if (px.producers.has(producerId)) {
+              producer = px.producers.get(producerId);
+              producerSocketId = sid;
+              break;
+            }
+          }
+          if (!producer || !producerSocketId) {
+            cb({ error: "Producer not found" });
+            return;
+          }
+          if (producerSocketId === socket.id) {
+            cb({ error: "Cannot consume own producer" });
+            return;
+          }
+          if (
+            !p.router.canConsume({
+              producerId,
+              rtpCapabilities,
+            })
+          ) {
+            cb({ error: "RTP capabilities mismatch" });
+            return;
+          }
+          const recvTransport = p.transports.get(transportId);
+          if (!recvTransport) {
+            cb({ error: "Receive transport not found" });
+            return;
+          }
+          const consumer = await recvTransport.consume({
+            producerId,
+            rtpCapabilities,
+            paused: false,
+          });
+          p.consumers.set(consumer.id, consumer);
+          cb({
+            id: consumer.id,
+            producerId: consumer.producerId,
+            kind: consumer.kind,
+            rtpParameters: consumer.rtpParameters,
+          });
+        } catch (err: any) {
+          cb({ error: err?.message || "consume failed" });
+        }
+      }
+    );
+
+    socket.on(
+      "getProducers",
+      (
+        _dataOrCb: any,
+        maybeCb?: (arg: { producers?: Array<{ id: string; kind: string; socketId: string }>; error?: string }) => void
+      ) => {
+        const cb =
+          typeof _dataOrCb === "function" ? _dataOrCb : maybeCb;
+        const p = mediasoupParticipants.get(socket.id);
+        if (!p) {
+          cb?.({ error: "Participant not found" });
+          return;
+        }
+        cb?.({ producers: getMediasoupProducersForRoom(p.roomId) });
+      }
+    );
+
+    socket.on(
+      "resumeConsumer",
+      async (
+        { consumerId }: { consumerId: string },
+        cb: (arg: { success?: boolean; error?: string }) => void
+      ) => {
+        try {
+          const p = mediasoupParticipants.get(socket.id);
+          const c = p?.consumers.get(consumerId);
+          if (!c) {
+            cb({ error: p ? "Consumer not found" : "Participant not found" });
+            return;
+          }
+          if (c.paused) await c.resume();
+          cb({ success: true });
+        } catch (err: any) {
+          cb({ error: err?.message || "resumeConsumer failed" });
+        }
+      }
+    );
+
+    socket.on("leaveRoom", async () => {
+      const roomId = cleanupMediasoupParticipant(socket.id);
+      if (roomId) {
+        socket.leave(roomId);
+        socket.to(roomId).emit("participantLeft", { socketId: socket.id });
+        if (isMediasoupRoomEmpty(roomId)) {
+          try {
+            const members = await fastify.prisma.conversationMember.findMany({
+              where: { conversationId: roomId, isDeleted: false, userId: { not: null } },
+              select: { userId: true },
+            });
+            for (const m of members) {
+              if (m.userId) io.to(String(m.userId)).emit("group_call_ended", { conversationId: roomId });
+            }
+          } catch (_) {}
+        }
+      }
+    });
+
+    // Group call: verify caller is in group, then notify members (no DB save)
+    socket.on(
+      "group_call_initiate",
+      async ({
+        callerId,
+        conversationId,
+        callType = "video",
+        callerName,
+        callerAvatar,
+      }: {
+        callerId: string;
+        conversationId: string;
+        callType?: CallType;
+        callerName?: string;
+        callerAvatar?: string;
+      }) => {
+        if (!callerId || !conversationId) return;
+
+        try {
+          const members = await fastify.prisma.conversationMember.findMany({
+            where: {
+              conversationId,
+              isDeleted: false,
+              userId: { not: null },
+            },
+            select: { userId: true },
+          });
+
+          const callerIsMember = members.some((m) => m.userId !== null && String(m.userId) === callerId);
+          if (!callerIsMember) {
+            const callerSockets = getSocketsForUser(callerId);
+            if (callerSockets?.size) {
+              io.to(callerId).emit("group_call_error", { message: "You are not in this group" });
+            }
+            return;
+          }
+
+          const memberUserIds = members
+            .map((m) => m.userId)
+            .filter((id): id is number => id != null)
+            .filter((id) => String(id) !== callerId);
+
+          const callerInfo = {
+            id: Number(callerId),
+            name: callerName ?? `User ${callerId}`,
+            avatar: callerAvatar ? FileService.avatarUrl(callerAvatar) : null,
+          };
+
+          for (const userId of memberUserIds) {
+            const userIdStr = String(userId);
+            const sockets = getSocketsForUser(userIdStr);
+            if (sockets && sockets.size > 0) {
+              io.to(userIdStr).emit("group_call_incoming", {
+                callerId,
+                conversationId,
+                callType,
+                callerInfo,
+              });
+            }
+          }
+          for (const m of members) {
+            if (m.userId) io.to(String(m.userId)).emit("group_call_started", { conversationId });
+          }
+        } catch (err: any) {
+          fastify.log.warn(err, "group_call_initiate failed");
+        }
+      }
+    );
+
+    //==========================================mediasoup Group Call end===========================================
+
     // 13. Disconnect - Cleanup
     socket.on("disconnect", () => {
+      const mediasoupRoomId = cleanupMediasoupParticipant(socket.id);
+      if (mediasoupRoomId) {
+        socket.to(mediasoupRoomId).emit("participantLeft", {
+          socketId: socket.id,
+        });
+        if (isMediasoupRoomEmpty(mediasoupRoomId)) {
+          void fastify.prisma.conversationMember
+            .findMany({
+              where: { conversationId: mediasoupRoomId, isDeleted: false, userId: { not: null } },
+              select: { userId: true },
+            })
+            .then((members) => {
+              for (const m of members) {
+                if (m.userId) io.to(String(m.userId)).emit("group_call_ended", { conversationId: mediasoupRoomId });
+              }
+            })
+            .catch(() => {});
+        }
+      }
+
       const userId = getUserId();
       if (!userId) {
         return;
       }
 
-      // Remove this specific socket from user's socket set
       const remainingCount = removeSocket(userId, socket.id);
 
-      // Only remove user from conversation rooms if this was their last socket
       if (remainingCount === 0) {
-        // Remove user from all conversation rooms - O(k) where k = user's rooms, not O(n) all rooms
         const userConversationIds = getUserConversationRooms(userId);
         userConversationIds.forEach(conversationId => {
           leaveConversationRoom(userId, conversationId);
@@ -1014,7 +1480,6 @@ declare module "fastify" {
   interface FastifyInstance {
     io: Server;
     onlineUsers: Map<string, Set<string>>;
-    // @ts-ignore - TypeScript module augmentation quirk: identical types seen as different
     activeCalls: Map<string, CallData>;
     isUserInConversationRoom: (
       userId: string,

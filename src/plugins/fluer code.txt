@@ -1,0 +1,1015 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:mediasfu_mediasoup_client/mediasfu_mediasoup_client.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await [Permission.camera, Permission.microphone].request();
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: GroupCallPage(),
+    );
+  }
+}
+
+class GroupCallPage extends StatefulWidget {
+  const GroupCallPage({super.key});
+
+  @override
+  State<GroupCallPage> createState() => _GroupCallPageState();
+}
+
+class _GroupCallPageState extends State<GroupCallPage> {
+  final serverCtrl = TextEditingController(
+    text: 'https://thread.signalsmind.com',
+  );
+  final userIdCtrl = TextEditingController(text: '6');
+  final roomCtrl = TextEditingController(text: 'cml651q15080yl2kkg56ixm3o');
+
+  IO.Socket? socket;
+
+  Device? device;
+  Transport? sendTransport;
+  Transport? recvTransport;
+
+  MediaStream? localStream;
+  final localRenderer = RTCVideoRenderer();
+
+  // Old maps (kept for reference / fallback, but not used for rendering)
+  final Map<String, MediaStream> socketToStream = {};
+  final Map<String, RTCVideoRenderer> remoteRenderers = {};
+
+  // New maps: per-producer (per-track) rendering – this fixes most black-screen issues
+  final Map<String, MediaStream> producerToStream = {}; // key = producerId
+  final Map<String, RTCVideoRenderer> producerToRenderer =
+      {}; // key = producerId
+
+  final Map<String, Consumer> consumers =
+      {}; // optional now (consume returns void)
+  final Map<String, String> producerToPeer = {};
+
+  bool connected = false;
+  bool inCall = false;
+  String? incomingRoom;
+  String? activeGroupCallConversationId;
+
+  final Set<String> pendingProducers = {};
+  bool isReadyToConsume = false;
+
+  /// ProducerIds we called consume() for; track events arrive in same order → assign track to first pending.
+  final List<String> _pendingTrackProducerIds = [];
+
+  Completer<void>? _sendTransportConnectCompleter;
+
+  @override
+  void initState() {
+    super.initState();
+    localRenderer.initialize();
+  }
+
+  @override
+  void dispose() {
+    localRenderer.dispose();
+    for (final r in remoteRenderers.values) r.dispose();
+    for (final r in producerToRenderer.values) r.dispose();
+    for (final s in socketToStream.values) s.dispose();
+    for (final s in producerToStream.values) s.dispose();
+    socket?.dispose();
+    super.dispose();
+  }
+
+  // Future<dynamic> request(String event, Map<String, dynamic>? data) {
+  //   final completer = Completer<dynamic>();
+  //   socket!.emitWithAck(
+  //     event,
+  //     data ?? {},
+  //     ack: (response) {
+  //       if (response is Map && response['error'] != null) {
+  //         completer.completeError(response['error']);
+  //       } else {
+  //         completer.complete(response);
+  //       }
+  //     },
+  //   );
+  //   return completer.future;
+  // }
+  Future<dynamic> request(String event, Map<String, dynamic>? data) async {
+    final completer = Completer<dynamic>();
+    socket!.emitWithAck(
+      event,
+      data ?? {},
+      ack: (response) {
+        debugPrint('$event ack: ${response != null && response is Map ? response.toString().length : response}');
+        // Socket.IO ack can be (result) or [result]; normalize to single value
+        dynamic res = response;
+        if (res is List && res.isNotEmpty) res = res.first;
+        if (res is Map) {
+          if (res['error'] != null) {
+            debugPrint('Server error on $event: ${res['error']}');
+            completer.completeError(res['error']);
+          } else {
+            completer.complete(res);
+          }
+        } else {
+          completer.complete(res);
+        }
+      },
+    );
+    return completer.future;
+  }
+
+  void connect() {
+    debugPrint('\nconnect called\n');
+    socket = IO.io(
+      serverCtrl.text,
+      IO.OptionBuilder().setTransports(['websocket']).build(),
+    );
+
+    socket!.onConnect((_) {
+      debugPrint('✅ Socket connected, ID: ${socket!.id}');
+      socket!.emit('join', userIdCtrl.text);
+      setState(() => connected = true);
+    });
+
+    socket!.onDisconnect((_) {
+      debugPrint('❌ Socket disconnected');
+      setState(() => connected = false);
+    });
+
+    socket!.on('group_call_incoming', (data) {
+      debugPrint('\n📞 group_call_incoming: $data\n');
+      setState(() => incomingRoom = data['conversationId']);
+    });
+
+    socket!.on('group_call_started', (data) {
+      debugPrint('\n📞 group_call_started: $data\n');
+      setState(() => activeGroupCallConversationId = data['conversationId']);
+    });
+
+    socket!.on('group_call_ended', (data) {
+      debugPrint('\n📞 group_call_ended: $data\n');
+      setState(() {
+        if (activeGroupCallConversationId == data['conversationId']) {
+          activeGroupCallConversationId = null;
+          inCall = false;
+          _cleanupAllMedia();
+        }
+      });
+    });
+
+    socket!.on('newProducer', (data) {
+      debugPrint('\n🆕 newProducer: $data\n');
+      final producerId = data['producerId'] as String;
+      final socketId = data['socketId'] as String;
+
+      if (socketId == socket!.id) {
+        debugPrint('⏭️ Skipping own producer');
+        return;
+      }
+
+      producerToPeer[producerId] = socketId;
+
+      if (isReadyToConsume) {
+        debugPrint('✅ Ready → consuming $producerId immediately');
+        _consumeProducer(producerId);
+      } else {
+        debugPrint('⏸️ Queuing $producerId');
+        pendingProducers.add(producerId);
+      }
+    });
+
+    socket!.on('participantLeft', (data) {
+      debugPrint('\n👋 participantLeft: $data\n');
+      final socketId = data['socketId'] as String;
+      _removeParticipant(socketId);
+    });
+  }
+
+  void _cleanupAllMedia() {
+    for (final stream in socketToStream.values) stream.dispose();
+    for (final stream in producerToStream.values) stream.dispose();
+    for (final r in remoteRenderers.values) r.dispose();
+    for (final r in producerToRenderer.values) r.dispose();
+
+    socketToStream.clear();
+    producerToStream.clear();
+    remoteRenderers.clear();
+    producerToRenderer.clear();
+    consumers.clear();
+    producerToPeer.clear();
+    pendingProducers.clear();
+    _pendingTrackProducerIds.clear();
+    isReadyToConsume = false;
+  }
+
+  Future<void> startCall() async {
+    final roomId = roomCtrl.text;
+    socket!.emit('group_call_initiate', {
+      'callerId': userIdCtrl.text,
+      'conversationId': roomId,
+      'callType': 'video',
+    });
+    await joinRoom(roomId);
+  }
+
+  Future<void> acceptCall() async {
+    await joinRoom(incomingRoom!);
+    setState(() => incomingRoom = null);
+  }
+
+  Future<void> joinRoom(String roomId) async {
+    try {
+      debugPrint('🚀 Joining room: $roomId');
+
+      final roomData = await request('createRoom', {'roomId': roomId});
+      debugPrint('✅ Room joined');
+
+      device = Device();
+      await device!.load(
+        routerRtpCapabilities: RtpCapabilities.fromMap(
+          roomData['rtpCapabilities'],
+        ),
+      );
+      debugPrint('✅ Device loaded');
+
+      await _createSendTransport();
+      await _createRecvTransport();
+      // Do NOT wait for recv transport 'connect' here. In mediasoup, recv transport
+      // fires 'connect' only when first used (first consume()). So we must produce
+      // and then consume; the connect event will fire when consume() is called.
+      debugPrint('✅ Transports created (recv connect will fire on first consume)');
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await _produce();
+      debugPrint('✅ Producers created');
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      isReadyToConsume = true;
+
+      debugPrint('🔍 Polling for producers...');
+      int pollAttempts = 0;
+      const maxPolls = 10;
+
+      while (pollAttempts < maxPolls) {
+        final existing = await request('getProducers', {});
+        final producers = existing['producers'] as List? ?? [];
+
+        debugPrint(
+          '📋 Poll $pollAttempts: Found ${producers.length} producers',
+        );
+
+        if (producers.isNotEmpty) {
+          for (final p in producers) {
+            final producerId = p['id'] as String;
+            final socketId = p['socketId'] as String;
+
+            if (socketId != socket!.id &&
+                !producerToPeer.containsKey(producerId)) {
+              debugPrint('✅ Found producer: $producerId from $socketId');
+              producerToPeer[producerId] = socketId;
+              pendingProducers.add(producerId);
+            }
+          }
+          break;
+        }
+
+        if (pendingProducers.isNotEmpty) {
+          debugPrint('✅ Received producers via events');
+          break;
+        }
+
+        pollAttempts++;
+        if (pollAttempts < maxPolls)
+          await Future.delayed(const Duration(milliseconds: 500));
+      }
+
+      if (pendingProducers.isNotEmpty) {
+        debugPrint(
+          '🔄 Processing ${pendingProducers.length} pending producers',
+        );
+        final toConsume = List<String>.from(pendingProducers);
+        pendingProducers.clear();
+
+        for (final producerId in toConsume) {
+          await _consumeProducer(producerId);
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+      } else {
+        debugPrint('⚠️ No producers found after polling');
+      }
+
+      setState(() => inCall = true);
+      debugPrint(
+        '✅ Call started! Remote renderers: ${producerToRenderer.length}',
+      );
+    } catch (error, stackTrace) {
+      debugPrint('❌ Join error: $error\n$stackTrace');
+      rethrow;
+    }
+  }
+
+  Future<void> _createSendTransport() async {
+    final data = await request('createTransport', {'type': 'send'});
+
+    sendTransport = device!.createSendTransport(
+      id: data['id'],
+      iceParameters: IceParameters.fromMap(data['iceParameters']),
+      iceCandidates: (data['iceCandidates'] as List)
+          .map((c) => IceCandidate.fromMap(c))
+          .toList(),
+      dtlsParameters: DtlsParameters.fromMap(data['dtlsParameters']),
+    );
+
+    final sendConnectCompleter = Completer<void>();
+
+    sendTransport!.on('connect', (params, cb, err) async {
+      try {
+        debugPrint('🔗 Send transport CONNECT triggered');
+        final dtls = params['dtlsParameters'];
+        final dtlsMap = dtls is Map ? Map<String, dynamic>.from(dtls) : (dtls?.toMap() ?? {});
+        await request('connectTransport', {
+          'transportId': sendTransport!.id,
+          'dtlsParameters': dtlsMap,
+        });
+        debugPrint('✅ Send transport connected');
+        sendConnectCompleter.complete();
+        cb?.call();
+      } catch (e) {
+        debugPrint('❌ Send connect error: $e');
+        sendConnectCompleter.completeError(e);
+        err?.call(e);
+      }
+    });
+
+    sendTransport!.on('produce', (params, cb, err) async {
+      try {
+        debugPrint('📤 Produce for ${params['kind']}');
+        final res = await request('produce', {
+          'transportId': sendTransport!.id,
+          'kind': params['kind'],
+          'rtpParameters': params['rtpParameters'].toMap(),
+        });
+        debugPrint('✅ Producer id: ${res['id']}');
+        cb?.call({'id': res['id']});
+      } catch (e) {
+        debugPrint('❌ Produce error: $e');
+        err?.call(e);
+      }
+    });
+
+    sendTransport!.on('connectionstatechange', (state) {
+      debugPrint('Send transport state: $state');
+      if (state == 'connected' || state == 'completed') {
+        if (!sendConnectCompleter.isCompleted) sendConnectCompleter.complete();
+      }
+    });
+
+    _sendTransportConnectCompleter = sendConnectCompleter;
+  }
+
+  Completer<void>? _recvTransportConnectCompleter;
+  Future<void> _createRecvTransport() async {
+    // final data = await request('createTransport', {'type': 'recv'});
+
+    // recvTransport = device!.createRecvTransport(
+    //   id: data['id'],
+    //   iceParameters: IceParameters.fromMap(data['iceParameters']),
+    //   iceCandidates: (data['iceCandidates'] as List)
+    //       .map((c) => IceCandidate.fromMap(c))
+    //       .toList(),
+    //   dtlsParameters: DtlsParameters.fromMap(data['dtlsParameters']),
+    // );
+
+    // recvTransport!.on('connect', (params, cb, err) async {
+    //   try {
+    //     await request('connectTransport', {
+    //       'transportId': recvTransport!.id,
+    //       'dtlsParameters': params['dtlsParameters'].toMap(),
+    //     });
+    //     cb?.call();
+    //   } catch (e) {
+    //     debugPrint('❌ Recv connect error: $e');
+    //     err?.call(e);
+    //   }
+    // });
+    final data = await request('createTransport', {'type': 'recv'});
+
+    recvTransport = device!.createRecvTransport(
+      id: data['id'],
+      iceParameters: IceParameters.fromMap(data['iceParameters']),
+      iceCandidates: (data['iceCandidates'] as List)
+          .map((c) => IceCandidate.fromMap(c))
+          .toList(),
+      dtlsParameters: DtlsParameters.fromMap(data['dtlsParameters']),
+    );
+
+    final recvConnectCompleter = Completer<void>();
+
+    recvTransport!.on('connect', (params, cb, err) async {
+      try {
+        debugPrint('🔗 RECV transport CONNECT event triggered!');
+        final dtls = params['dtlsParameters'];
+        final dtlsMap = dtls is Map ? Map<String, dynamic>.from(dtls) : (dtls?.toMap() ?? {});
+        final response = await request('connectTransport', {
+          'transportId': recvTransport!.id,
+          'dtlsParameters': dtlsMap,
+        });
+        debugPrint('✅ RECV transport connected to server!');
+        recvConnectCompleter.complete();
+        cb?.call();
+      } catch (e) {
+        debugPrint('❌ RECV connect failed: $e');
+        recvConnectCompleter.completeError(e);
+        err?.call(e);
+      }
+    });
+
+    recvTransport!.on('connectionstatechange', (state) {
+      debugPrint('RECV transport state changed: $state');
+      if (state == 'connected' || state == 'completed') {
+        if (!recvConnectCompleter.isCompleted) recvConnectCompleter.complete();
+      } else if (state == 'failed') {
+        debugPrint('❌ RECV transport failed!');
+        if (!recvConnectCompleter.isCompleted)
+          recvConnectCompleter.completeError('failed');
+      }
+    });
+
+    //     recvTransport!.on('track', (event, accept, errback) async{
+    //       debugPrint('🎵 TRACK EVENT RECEIVED! Event: $event');
+
+    //       if (event is Map) {
+    //         final track = event['track'] as MediaStreamTrack?;
+    //         final streams = event['streams'] as List?;
+    //         debugPrint('  Track kind: ${track?.kind}, enabled: ${track?.enabled}');
+
+    //         if (streams != null && streams.isNotEmpty) {
+    //           final stream = streams[0] as MediaStream;
+    //           debugPrint(
+    //             '  Stream ID: ${stream.id} | Tracks now: ${stream.getTracks().length}',
+    //           );
+
+    //           // Optional: try to refresh renderer if we can match producerId
+    //           // (you may need to correlate via producerId if possible)
+    //           // For now, just log – add refresh logic if needed after testing
+    //           setState(() {});
+    //           // Try to refresh all renderers that might be waiting
+    // for (final entry in producerToRenderer.entries) {
+    //   final renderer = entry.value;
+    //   final currentStream = renderer.srcObject;
+    //   if (currentStream != null) {
+    //     renderer.srcObject = null;
+    //     await Future.delayed(const Duration(milliseconds: 40));
+    //     renderer.srcObject = currentStream;
+    //     debugPrint('Forced renderer refresh for producer ${entry.key}');
+    //   }
+    // }
+    // setState(() {});
+    //         }
+    //       }
+    //     });
+
+    recvTransport!.on('track', (event, accept, errback) {
+      // Library may pass (track, stream) or (eventMap, accept, errback). Accept both.
+      MediaStreamTrack? track;
+      if (event is MediaStreamTrack) {
+        track = event;
+        debugPrint('🎵 TRACK EVENT (track as 1st arg): ${track.kind}');
+      } else if (event is Map) {
+        track = event['track'] as MediaStreamTrack?;
+        if (track == null) track = event['mediaStreamTrack'] as MediaStreamTrack?;
+        debugPrint('🎵 TRACK EVENT (map): ${track?.kind}');
+      } else if (event is List && event.isNotEmpty) {
+        final first = event.first;
+        if (first is MediaStreamTrack) track = first;
+        debugPrint('🎵 TRACK EVENT (list): ${track?.kind}');
+      }
+      if (track == null) {
+        debugPrint('🎵 TRACK EVENT: could not get track, event type=${event.runtimeType}');
+        return;
+      }
+
+      String? producerId;
+      if (_pendingTrackProducerIds.isNotEmpty) {
+        producerId = _pendingTrackProducerIds.removeAt(0);
+        debugPrint('  Assigning ${track.kind} to producer: $producerId');
+      }
+
+      if (producerId != null) {
+        final ourStream = producerToStream[producerId];
+        final renderer = producerToRenderer[producerId];
+        if (ourStream != null && renderer != null) {
+          ourStream.addTrack(track);
+          renderer.srcObject = ourStream;
+          debugPrint('  ✅ Added ${track.kind} to stream for $producerId');
+          setState(() {});
+        }
+      } else {
+        debugPrint('  No pending producer for ${track.kind} track');
+      }
+    });
+    _recvTransportConnectCompleter = recvConnectCompleter;
+  }
+
+  Future<void> _produce() async {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      'audio': true,
+      'video': {'width': 640, 'height': 480},
+    });
+
+    localRenderer.srcObject = localStream;
+
+    final tracks = localStream!.getTracks();
+    debugPrint('📹 Got ${tracks.length} tracks');
+
+    for (final track in tracks) {
+      final source = track.kind == 'audio' ? 'mic' : 'cam';
+      debugPrint('▶️ Producing ${track.kind}');
+
+      sendTransport!.produce(
+        track: track,
+        stream: localStream!,
+        source: source,
+      );
+
+      if (track == tracks.first && _sendTransportConnectCompleter != null) {
+        try {
+          await _sendTransportConnectCompleter!.future.timeout(
+            const Duration(seconds: 10),
+          );
+          debugPrint('✅ Send transport connected');
+        } catch (e) {
+          debugPrint('⚠️ Send connect timeout/error: $e');
+        }
+      }
+
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    debugPrint('✅ Production complete');
+  }
+
+  Future<void> _consumeProducer(String producerId) async {
+    try {
+      if (consumers.containsKey(producerId)) {
+        debugPrint('⏭️ Already consuming $producerId');
+        return;
+      }
+
+      final peerId = producerToPeer[producerId];
+      if (peerId == null) {
+        debugPrint('⚠️ No peer for $producerId → queuing');
+        pendingProducers.add(producerId);
+        return;
+      }
+
+      if (peerId == socket!.id) {
+        debugPrint('⏭️ Skipping own $producerId');
+        return;
+      }
+
+      if (!isReadyToConsume) {
+        debugPrint('⏸️ Queuing $producerId');
+        pendingProducers.add(producerId);
+        return;
+      }
+      debugPrint('connection state : ${recvTransport!.connectionState}');
+      // Recv transport 'connect' fires when we call consume() below, not before.
+      // Proceed with consume; the connect handler will call connectTransport when needed.
+      if (recvTransport!.connectionState != 'connected' &&
+          recvTransport!.connectionState != 'completed') {
+        debugPrint(
+          '🔄 Recv not connected yet (normal) – connect will fire on consume()',
+        );
+      }
+
+      debugPrint('🔄 Consuming $producerId from $peerId');
+
+      final data = await request('consume', {
+        'transportId': recvTransport!.id,
+        'producerId': producerId,
+        'rtpCapabilities': device!.rtpCapabilities.toMap(),
+      });
+
+      final consumerId = data['id'] as String;
+      final kind = data['kind'] as String;
+      debugPrint('✅ Consumer $consumerId for $kind (producer $producerId)');
+
+      final stream = await createLocalMediaStream('remote-$producerId');
+      producerToStream[producerId] = stream;
+      debugPrint('📺 New stream for $producerId');
+
+      final renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      renderer.srcObject = stream;
+      producerToRenderer[producerId] = renderer;
+      debugPrint('🖥️ New renderer for $producerId');
+
+      _pendingTrackProducerIds.add(producerId);
+      recvTransport!.consume(
+        id: consumerId,
+        producerId: producerId,
+        peerId: peerId,
+        kind: kind == 'video'
+            ? RTCRtpMediaType.RTCRtpMediaTypeVideo
+            : RTCRtpMediaType.RTCRtpMediaTypeAudio,
+        rtpParameters: RtpParameters.fromMap(data['rtpParameters']),
+      );
+
+      debugPrint('✅ consume() called → waiting for track (pending: ${_pendingTrackProducerIds.length})');
+
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      try {
+        await request('resumeConsumer', {'consumerId': consumerId});
+        debugPrint('✅ $consumerId resumed');
+      } catch (e) {
+        debugPrint('⚠️ Resume failed: $e');
+      }
+
+      setState(() {});
+      debugPrint('✅ UI updated – renderers: ${producerToRenderer.length}');
+    } catch (e, st) {
+      debugPrint('❌ Consume failed $producerId: $e\n$st');
+    }
+  }
+
+  void _removeParticipant(String socketId) {
+    debugPrint('🗑 Removing $socketId');
+
+    final producersToRemove = producerToPeer.entries
+        .where((e) => e.value == socketId)
+        .map((e) => e.key)
+        .toList();
+
+    for (final producerId in producersToRemove) {
+      consumers.remove(producerId);
+      producerToPeer.remove(producerId);
+
+      producerToStream[producerId]?.dispose();
+      producerToStream.remove(producerId);
+
+      producerToRenderer[producerId]?.dispose();
+      producerToRenderer.remove(producerId);
+    }
+
+    // Optional old cleanup
+    socketToStream.remove(socketId);
+    remoteRenderers.remove(socketId);
+
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Group Call')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: !inCall ? _buildSetup() : _buildCall(),
+      ),
+    );
+  }
+
+  Widget _buildSetup() {
+    return Column(
+      children: [
+        TextField(
+          controller: serverCtrl,
+          decoration: const InputDecoration(labelText: 'Server URL'),
+        ),
+        TextField(
+          controller: userIdCtrl,
+          decoration: const InputDecoration(labelText: 'User ID'),
+        ),
+        TextField(
+          controller: roomCtrl,
+          decoration: const InputDecoration(labelText: 'Conversation ID'),
+        ),
+        const SizedBox(height: 20),
+        ElevatedButton(
+          onPressed: connected ? null : connect,
+          child: const Text('Connect'),
+        ),
+        ElevatedButton(
+          onPressed: connected ? startCall : null,
+          child: const Text('Start Group Call'),
+        ),
+        if (incomingRoom != null)
+          ElevatedButton(
+            onPressed: acceptCall,
+            child: const Text('Accept Incoming Call'),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCall() {
+    // Approximate participant count from unique peers
+    final uniquePeers = producerToPeer.values.toSet().length;
+
+    return Column(
+      children: [
+        Text(
+          'Remote participants: $uniquePeers (tracks: ${producerToRenderer.length})',
+        ),
+        Expanded(
+          child: GridView.count(
+            crossAxisCount: 3,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            children: [
+              // Local
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: RTCVideoView(
+                  localRenderer,
+                  mirror: true,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
+              ),
+
+              // Remotes: one per track/producer
+              ...producerToRenderer.entries.map((entry) {
+                final producerId = entry.key;
+                final kind = producerToPeer[producerId] != null
+                    ? 'remote'
+                    : '?';
+
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: RTCVideoView(
+                        entry.value,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        color: Colors.black54,
+                        child: Text(
+                          kind.toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ],
+          ),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            socket!.emit('leaveRoom');
+            _cleanupAllMedia();
+            setState(() => inCall = false);
+          },
+          child: const Text('Leave Call'),
+        ),
+      ],
+    );
+  }
+}
+//======== Grok say ========
+[2/8/26, 3:27:52 PM] ~Nahidul Islam Shakin (Software Engineer): The logs and backend code you shared make the problem very clear now:
+The recvTransport never connects because the 'connect' event is never triggered on the client side for recv transports.
+This is not a Flutter/mediasfu_mediasoup_client bug — it's a server-side issue in how your Node.js/mediasoup backend handles createTransport and connectTransport.
+Root Cause (confirmed from code + logs)
+
+Your server creates both send and recv WebRtcTransports correctly (createTransport handler is the same for both types).
+The client calls connectTransport for recv (you see it in logs when 'connect' fires).
+But on the server side, the connectTransport handler never actually connects the transport for recv:
+
+Look at this line in your connectTransport handler:
+JavaScriptawait t.connect({ dtlsParameters });
+This line throws an error silently for recv transports in many mediasoup versions/configs.
+Why?
+
+mediasoup recv transports do NOT support .connect() in the same way send transports do.
+For recv transports, the client must not call .connect() — the server already knows the DTLS parameters from the initial createWebRtcTransport call.
+mediasoup docs explicitly say:
+
+For recv transports: do not call transport.connect() on the server side. The transport is already "connected" after creation.
+Your server is trying to call t.connect() on recv transports → it throws "cannot connect a recv transport" or similar → the promise rejects → but your code doesn't catch/log it properly → server never sends ack → client never gets callback → 'connect' event never fires on client → state stuck at "new".
+Proof from your logs
+
+
+log of flutter: 
+No ← connectTransport ack: for recv (only for send)
+No 🔗 RECV CONNECT EVENT FIRED!
+connection state : new forever
+Consume skipped
+
+Fix: Update server connectTransport handler
+You must skip .connect() for recv transports.
+Updated connectTransport handler:
+JavaScriptsocket.on(
+  "connectTransport",
+  async (
+    {
+      transportId,
+      dtlsParameters,
+    }: { transportId: string; dtlsParameters: any },
+    cb: (arg: { success?: boolean; error?: string }) => void
+  ) => {
+    try {
+      const p = mediasoupParticipants.get(socket.id);
+      if (!p) {
+        cb({ error: "Participant not found" });
+        return;
+      }
+
+      const t = p.transports.get(transportId);
+      if (!t) {
+        cb({ error: "Transport not found" });
+        return;
+      }
+
+      // IMPORTANT: Only call connect() for SEND transports
+      // Recv transports are already "connected" after creation
+      if (t.appData?.type === 'send' || !t.appData?.type) {  // or check some flag you set
+        debugPrint(⁠ Connecting SEND transport ${transportId} ⁠);
+        await t.connect({ dtlsParameters });
+      } else {
+        debugPrint(⁠ Skipping connect for RECV transport ${transportId} (already connected) ⁠);
+      }
+
+      cb({ success: true });
+    } catch (err: any) {
+      console.error('connectTransport error:', err);
+      cb({ error: err?.message || "connectTransport failed" });
+    }
+  }
+);
+
+
+Better version (recommended — add type when creating transport):
+When creating transport in createTransport handler, tag it:
+JavaScriptconst transport = await p.router.createWebRtcTransport({
+  listenIps: [{ ip: "0.0.0.0", announcedIp }],
+  enableUdp: true,
+  enableTcp: true,
+  preferUdp: true,
+  // Add this:
+  appData: { type: _payload.type },  // 'send' or 'recv'
+});
+Then in connectTransport:
+JavaScriptif (t.appData?.type === 'send') {
+  await t.connect({ dtlsParameters });
+  console.log(⁠ SEND transport ${transportId} connected ⁠);
+} else {
+  console.log(⁠ RECV transport ${transportId} — no connect needed ⁠);
+}
+cb({ success: true });
+Additional server-side improvements (strongly recommended)
+
+Add logging everywhere:
+
+JavaScriptconsole.log(⁠ [connectTransport] transportId=${transportId}, type=${t.appData?.type || 'unknown'} ⁠);
+
+Catch and log errors properly:
+
+JavaScript} catch (err: any) {
+  console.error(⁠ [connectTransport] FAILED for ${transportId}: ⁠, err.message, err.stack);
+  cb({ error: err.message || "connectTransport failed" });
+}
+
+In createTransport, log:
+
+JavaScriptconsole.log(⁠ Created ${ _payload.type } transport: ${transport.id} ⁠);
+After fixing server
+
+Restart server
+Re-run Flutter app
+You should now see:text→ connectTransport → data: {transportId: ..., dtlsParameters: ...}
+← connectTransport ack: {success: true}
+🔗 RECV CONNECT EVENT FIRED!
+✅ RECV transport connected to server!
+RECV state → connected
+Then consume proceeds → consume() called → track events → video appears
+[2/8/26, 3:29:42 PM] ~Nahidul Islam Shakin (Software Engineer): 📞 group_call_incoming: {callerId: 7, conversationId: cml651q15080yl2kkg56ixm3o, callType: video, callerInfo: {id: 7, name: User, avatar: null}}
+2
+I/flutter (23602): 
+I/flutter (23602): 📞 group_call_started: {conversationId: cml651q15080yl2kkg56ixm3o}
+I/flutter (23602): 
+I/VRI[MainActivity]@a0e0d0f(23602): call setFrameRateCategory for touch hint category=high hint, reason=touch, vri=VRI[MainActivity]@a0e0d0f
+I/flutter (23602): 🚀 Joining room: cml651q15080yl2kkg56ixm3o
+I/flutter (23602): createRoom ack: {rtpCapabilities: {codecs: [{kind: audio, mimeType: audio/opus, clockRate: 48000, channels: 2, rtcpFeedback: [{type: nack, parameter: }, {type: transport-cc, parameter: }], parameters: {}, preferredPayloadType: 100}, {kind: video, mimeType: video/VP8, clockRate: 90000, rtcpFeedback: [{type: nack, parameter: }, {type: nack, parameter: pli}, {type: ccm, parameter: fir}, {type: goog-remb, parameter: }, {type: transport-cc, parameter: }], parameters: {}, preferredPayloadType: 101}, {kind: video, mimeType: video/rtx, preferredPayloadType: 102, clockRate: 90000, parameters: {apt: 101}, rtcpFeedback: []}], headerExtensions: [{kind: audio, uri: urn:ietf:params:rtp-hdrext:sdes:mid, preferredId: 1, preferredEncrypt: false, direction: sendrecv}, {kind: video, uri: urn:ietf:params:rtp-hdrext:sdes:mid, preferredId: 1, preferredEncrypt: false, direction: sendrecv}, {kind: video, uri: urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id, preferredId: 2, preferredEncrypt: false, direction: recvonly}, {kind: video, 
+I/flutter (23602): ✅ Room joined
+2
+D/MediaConstraintsUtils(23602): mandatory constraints are not a map
+D/MediaConstraintsUtils(23602): optional constraints are not an array
+I/flutter (23602): ✅ Device loaded
+I/flutter (23602): createTransport ack: {id: 344c3d35-a525-49d1-ad87-61c704333277, iceParameters: {usernameFragment: 505mj2mmhj65n46satyjo7fbewb2k93t, password: zaz450wgjlg3lyk64rkhuxh9oqlgabh3, iceLite: true}, iceCandidates: [{foundation: udpcandidate, priority: 1076302079, ip: 31.97.236.206, address: 31.97.236.206, protocol: udp, port: 41570, type: host}, {foundation: tcpcandidate, priority: 1076276479, ip: 31.97.236.206, address: 31.97.236.206, protocol: tcp, port: 44680, type: host, tcpType: passive}], dtlsParameters: {fingerprints: [{algorithm: sha-1, value: 92:C3:F9:14:0A:1B:B2:05:F7:91:4E:88:EF:2F:62:7C:2E:90:95:C2}, {algorithm: sha-224, value: 47:9A:F9:7C:B1:73:19:26:DD:08:53:D6:4F:6C:2E:A8:76:F1:C9:6A:60:7B:B1:77:7D:38:32:E7}, {algorithm: sha-512, value: 0B:00:FA:FA:7B:84:2E:CF:F4:3F:AC:40:B5:A2:3A:58:8F:F1:71:36:D1:20:B8:8B:EF:09:04:82:7D:FB:BA:79:10:70:E3:64:BD:B5:AB:18:17:AA:7C:44:02:62:C5:14:94:FC:97:64:35:BC:CD:6A:02:5F:D6:B9:56:82:8A:CE}, {algorithm: sha-256, value: 71:4F:C4:E3:17:19:FC:2F:AA:F6:3D:08:4F:60:65:6
+I/flutter (23602): createTransport ack: {id: 5af1ca3c-1cf8-4433-9d1b-45107ceb520c, iceParameters: {usernameFragment: uj6ympfyh3kmky9ezk7rzycbm0pztfa7, password: od0k4zhwb5yoaob4hupdpoyhwijpr1ot, iceLite: true}, iceCandidates: [{foundation: udpcandidate, priority: 1076302079, ip: 31.97.236.206, address: 31.97.236.206, protocol: udp, port: 46737, type: host}, {foundation: tcpcandidate, priority: 1076276479, ip: 31.97.236.206, address: 31.97.236.206, protocol: tcp, port: 45754, type: host, tcpType: passive}], dtlsParameters: {fingerprints: [{algorithm: sha-1, value: 92:C3:F9:14:0A:1B:B2:05:F7:91:4E:88:EF:2F:62:7C:2E:90:95:C2}, {algorithm: sha-224, value: 47:9A:F9:7C:B1:73:19:26:DD:08:53:D6:4F:6C:2E:A8:76:F1:C9:6A:60:7B:B1:77:7D:38:32:E7}, {algorithm: sha-512, value: 0B:00:FA:FA:7B:84:2E:CF:F4:3F:AC:40:B5:A2:3A:58:8F:F1:71:36:D1:20:B8:8B:EF:09:04:82:7D:FB:BA:79:10:70:E3:64:BD:B5:AB:18:17:AA:7C:44:02:62:C5:14:94:FC:97:64:35:BC:CD:6A:02:5F:D6:B9:56:82:8A:CE}, {algorithm: sha-256, value: 71:4F:C4:E3:17:19:FC:2F:AA:F6:3D:08:4F:60:65:6
+I/flutter (23602): ✅ Transports created (recv connect will fire on first consume)
+I/FlutterWebRTCPlugin(23602): getUserMedia(audio): mandatory: [], optional: [googNoiseSuppression: true, googEchoCancellation: true, echoCancellation: true, googEchoCancellation2: true, googDAEchoCancellation: true]
+I/FlutterWebRTCPlugin(23602): getUserMedia(video): ConstraintsMap{mMap={width=640, height=480}}
+I/CameraManagerGlobal(23602): Connecting to camera service
+D/VendorTagDescriptor(23602): addVendorDescriptor: vendor tag id 8932615658386372252 added
+I/CameraManagerGlobal(23602): Camera 0 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client com.whatsapp.w4b API Level 1 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 1 facing CAMERA_FACING_FRONT state now CAMERA_STATE_CLOSED for client com.example.groupp_call API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 2 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 20 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client com.sec.android.app.camera API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 23 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 3 facing CAMERA_FACING_FRONT state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 4 facing CAMERA_FACING_FRONT state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 56 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 58 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client android.system API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 60 facing CAMERA_FACING_BACK state now CAMERA_STATE_CLOSED for client com.sec.android.app.camera API Level 2 User Id 0Device Id 0
+D/FlutterWebRTCPlugin(23602): Creating video capturer using Camera2 API.
+D/FlutterWebRTCPlugin(23602): Create front camera 1 succeeded
+D/FlutterWebRTCPlugin(23602): CameraEventsHandler.waitForCameraOpen
+D/FlutterWebRTCPlugin(23602): CameraEventsHandler.onCameraOpening: cameraName=1
+I/CameraManagerGlobal(23602): Camera 1 facing CAMERA_FACING_FRONT state now CAMERA_STATE_OPENING for client com.example.groupp_call API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 1 facing CAMERA_FACING_FRONT state now CAMERA_STATE_OPEN for client com.example.groupp_call API Level 2 User Id 0Device Id 0
+I/CameraManagerGlobal(23602): Camera 1 facing CAMERA_FACING_FRONT state now CAMERA_STATE_ACTIVE for client com.example.groupp_call API Level 2 User Id 0Device Id 0
+7
+D/ple.groupp_call(23602): [is_supported_usage] IMPLEMENTATION_DEFINED must not have CPU usage, [0x20133]
+D/FlutterWebRTCPlugin(23602): CameraEventsHandler.onFirstFrameAvailable
+D/FlutterWebRTCPlugin(23602): Target: 640x480@30, Actual: 640x480@30
+D/FlutterWebRTCPlugin(23602): MediaStream id: 9980e5b0-3935-4894-89d7-6d6ead213d06
+I/flutter (23602): 📹 Got 2 tracks
+I/flutter (23602): ▶️ Producing audio
+D/ple.groupp_call(23602): [is_supported_usage] IMPLEMENTATION_DEFINED must not have CPU usage, [0x20133]
+I/VRI[MainActivity]@a0e0d0f(23602): call setFrameRateCategory for touch hint category=no preference, reason=boost timeout, vri=VRI[MainActivity]@a0e0d0f
+W/FlutterWebRTCPlugin(23602): FlutterRTCVideoRenderer.setVideoTrack, set video track to 99d005b2-2cff-4456-9a8a-d381ccab6b15
+I/VRI[MainActivity]@a0e0d0f(23602): handleResized, frames=ClientWindowFrames{frame=[0,0][1080,2340] display=[0,0][1080,2340] parentFrame=[0,0][0,0]} displayId=0 dragResizing=false compatScale=1.0 frameChanged=false attachedFrameChanged=false configChanged=false displayChanged=false compatScaleChanged=false dragResizingChanged=false
+D/MediaConstraintsUtils(23602): mandatory constraints are not a map
+D/MediaConstraintsUtils(23602): optional constraints are not an array
+I/flutter (23602): 🔗 Send transport CONNECT triggered
+I/GSC     (23602): SID[0] : e0c03a90791568a3, Kind: 1, time : 4.480 ms
+I/GSC     (23602): SID[1] : cf11f932ed792da6, Kind: 0, time : 11.221 ms
+I/GSC     (23602): SID[2] : e0c03a90791568a3, Kind: 1, time : 6.261 ms
+I/GSC     (23602): SID[3] : 655c2a36f85c8610, Kind: 1, time : 1.117 ms
+I/flutter (23602): connectTransport ack: {success: true}
+2
+I/flutter (23602): ✅ Send transport connected
+I/flutter (23602): ▶️ Producing video
+I/flutter (23602): ✅ Production complete
+I/flutter (23602): ✅ Producers created
+I/flutter (23602): 🔍 Polling for producers...
+I/flutter (23602): getProducers ack: {producers: [{id: 84ab0308-59b1-40a7-9838-f401c7ffbcae, kind: audio, socketId: Ukrypf1WvfQRVNQwAAAN}, {id: 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9, kind: video, socketId: Ukrypf1WvfQRVNQwAAAN}]}
+I/flutter (23602): 📋 Poll 0: Found 2 producers
+I/flutter (23602): ✅ Found producer: 84ab0308-59b1-40a7-9838-f401c7ffbcae from Ukrypf1WvfQRVNQwAAAN
+I/flutter (23602): ✅ Found producer: 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9 from Ukrypf1WvfQRVNQwAAAN
+I/flutter (23602): 🔄 Processing 2 pending producers
+I/flutter (23602): connection state : new
+I/flutter (23602): 🔄 Recv not connected yet (normal) – connect will fire on consume()
+I/flutter (23602): 🔄 Consuming 84ab0308-59b1-40a7-9838-f401c7ffbcae from Ukrypf1WvfQRVNQwAAAN
+I/InsetsSourceConsumer(23602): applyRequestedVisibilityToControl: visible=true, type=statusBars, host=com.example.groupp_call/com.example.groupp_call.MainActivity
+I/flutter (23602): consume ack: {id: b8bec8df-0078-4ffe-90a2-9739b3bbbbba, producerId: 84ab0308-59b1-40a7-9838-f401c7ffbcae, kind: audio, rtpParameters: {codecs: [{mimeType: audio/opus, payloadType: 100, clockRate: 48000, channels: 2, parameters: {minptime: 10, useinbandfec: 1}, rtcpFeedback: []}], headerExtensions: [], encodings: [{ssrc: 381549275}], rtcp: {cname: keIZeqn5OG9uJYlI, reducedSize: true}, mid: 0}}
+I/flutter (23602): ✅ Consumer b8bec8df-0078-4ffe-90a2-9739b3bbbbba for audio (producer 84ab0308-59b1-40a7-9838-f401c7ffbcae)
+I/flutter (23602): 📺 New stream for 84ab0308-59b1-40a7-9838-f401c7ffbcae
+I/flutter (23602): 🖥️ New renderer for 84ab0308-59b1-40a7-9838-f401c7ffbcae
+I/flutter (23602): ✅ consume() called → waiting for track
+D/FlutterWebRTCPlugin(23602): onAddTrack
+D/MediaConstraintsUtils(23602): mandatory constraints are not a map
+D/MediaConstraintsUtils(23602): optional constraints are not an array
+I/flutter (23602): 🔗 RECV transport CONNECT event triggered!
+I/flutter (23602): connectTransport ack: {success: true}
+I/flutter (23602): ✅ RECV transport connected to server! Response: {success: true}
+I/flutter (23602): resumeConsumer ack: {success: true}
+I/flutter (23602): ✅ b8bec8df-0078-4ffe-90a2-9739b3bbbbba resumed
+I/flutter (23602): ✅ UI updated – renderers: 1
+I/flutter (23602): connection state : new
+I/flutter (23602): 🔄 Recv not connected yet (normal) – connect will fire on consume()
+I/flutter (23602): 🔄 Consuming 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9 from Ukrypf1WvfQRVNQwAAAN
+I/flutter (23602): consume ack: {id: 27266652-99d9-488a-bb15-46aea9167bbf, producerId: 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9, kind: video, rtpParameters: {codecs: [{mimeType: video/VP8, payloadType: 101, clockRate: 90000, parameters: {}, rtcpFeedback: [{type: ccm, parameter: fir}, {type: nack, parameter: }, {type: nack, parameter: pli}]}, {mimeType: video/rtx, payloadType: 102, clockRate: 90000, parameters: {apt: 101}, rtcpFeedback: []}], headerExtensions: [], encodings: [{ssrc: 214324485, rtx: {ssrc: 214324486}}], rtcp: {cname: keIZeqn5OG9uJYlI, reducedSize: true}, mid: 1}}
+I/flutter (23602): ✅ Consumer 27266652-99d9-488a-bb15-46aea9167bbf for video (producer 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9)
+I/flutter (23602): 📺 New stream for 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9
+I/flutter (23602): 🖥️ New renderer for 7e2f03c3-7c6a-4edf-9d7e-e990cb4486f9
+I/flutter (23602): ✅ consume() called → waiting for track
+I/flutter (23602): resumeConsumer ack: {success: true}
+I/flutter (23602): ✅ 27266652-99d9-488a-bb15-46aea9167bbf resumed
+I/flutter (23602): ✅ UI updated – renderers: 2
+I/flutter (23602): ✅ Call started! Remote renderers: 2
+I/GSC     (23602): SID[76] : 4a351227322e164f, Kind: 1, time : 8.339 ms
+I/GSC     (23602): SID[77] : aad7ee51021e4d4d, Kind: 0, time : 4.264 ms

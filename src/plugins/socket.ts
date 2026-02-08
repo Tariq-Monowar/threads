@@ -1132,6 +1132,7 @@ export default fp(async (fastify) => {
             enableUdp: true,
             enableTcp: true,
             preferUdp: true,
+            appData: { type: type === "recv" ? "recv" : "send" },
           });
           p.transports.set(transport.id, transport);
           transport.on("dtlsstatechange", (state) => {
@@ -1169,9 +1170,17 @@ export default fp(async (fastify) => {
             cb({ error: p ? "Transport not found" : "Participant not found" });
             return;
           }
-          await t.connect({ dtlsParameters });
-          console.log("[connectTransport] connected transport", transportId, "socket", socket.id);
-          cb({ success: true });
+          const transportType = (t.appData as { type?: string })?.type ?? "send";
+          if (transportType === "recv") {
+            // Recv transports: do not call connect(); they are ready after creation.
+            // Client still sends connectTransport; we ack success so the client can proceed.
+            console.log("[connectTransport] RECV transport", transportId, "— ack without connect()");
+            cb({ success: true });
+          } else {
+            await t.connect({ dtlsParameters });
+            console.log("[connectTransport] SEND transport", transportId, "connected");
+            cb({ success: true });
+          }
         } catch (err: any) {
           console.error("[connectTransport] failed", err);
           cb({ error: err?.message || "connectTransport failed" });

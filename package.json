@@ -11,7 +11,8 @@
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "migrate:postgres-to-mysql": "ts-node scripts/migrate-postgres-to-mysql-simple.ts",
-    "clear:fcm-tokens": "ts-node scripts/clear-fcm-tokens.ts"
+    "clear:fcm-tokens": "ts-node scripts/clear-fcm-tokens.ts",
+    "transfer": "ts-node scripts/transfer.ts"
   },
   "keywords": [],
   "author": "",

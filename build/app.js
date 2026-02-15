@@ -33,9 +33,10 @@ app.setNotFoundHandler((request, reply) => {
 });
 app.setErrorHandler((error, request, reply) => {
     request.log.error(error);
+    const message = error instanceof Error ? error.message : String(error);
     reply.status(500).send({
         statusCode: 500,
-        error: error.message,
+        error: message,
         message: "Internal Server Error",
     });
 });

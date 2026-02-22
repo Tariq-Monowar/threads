@@ -319,15 +319,24 @@
 
         .incoming-call {
             background: white;
-            border-radius: 12px;
+            border-radius: 16px;
             padding: 24px;
             margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.18);
+            border: 2px solid #667eea33;
+            animation: ring-pulse 1.2s ease-in-out infinite;
+        }
+
+        @keyframes ring-pulse {
+            0%   { box-shadow: 0 8px 24px rgba(102,126,234,0.18); }
+            50%  { box-shadow: 0 8px 40px rgba(102,126,234,0.42); }
+            100% { box-shadow: 0 8px 24px rgba(102,126,234,0.18); }
         }
 
         .incoming-call h3 {
             color: #667eea;
             margin-bottom: 12px;
+            font-size: 18px;
         }
 
         .incoming-call p {
@@ -351,6 +360,36 @@
             display: flex;
         }
 
+        .group-call-join .join-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .group-call-join .join-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(255,255,255,0.5);
+            display: none;
+        }
+
+        .group-call-join .join-avatar-fallback {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.25);
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid rgba(255,255,255,0.5);
+            flex-shrink: 0;
+        }
+
         .group-call-join span {
             font-weight: 600;
         }
@@ -363,10 +402,103 @@
             border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
+            flex-shrink: 0;
         }
 
         .group-call-join .btn-join:hover {
             background: #f0fdf4;
+        }
+
+        /* Call header inside the video section */
+        .call-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .call-header-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #667eea33;
+            display: none;
+        }
+
+        .call-header-avatar-fallback {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            font-size: 20px;
+            font-weight: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .call-header-info h2 {
+            color: #667eea;
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .call-header-info p {
+            color: #6b7280;
+            font-size: 13px;
+            margin: 2px 0 0;
+        }
+
+        /* Participant avatar in video tile */
+        .video-participant-info {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 28px 10px 10px;
+            background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%);
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+        }
+
+        .participant-avatar-wrap {
+            flex-shrink: 0;
+        }
+
+        .participant-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(255,255,255,0.5);
+            display: none;
+        }
+
+        .participant-avatar-fallback {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            font-size: 13px;
+            font-weight: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid rgba(255,255,255,0.5);
+        }
+
+        .participant-name {
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
         }
 
         @media (max-width: 768px) {
@@ -420,19 +552,46 @@
         </div>
 
         <div class="incoming-call" id="incomingCallSection" style="display: none;">
-            <h3>Incoming group call</h3>
-            <p id="incomingCallFrom"></p>
-            <button class="btn btn-primary" onclick="acceptGroupCall()">Accept</button>
-            <button class="btn btn-danger" onclick="declineGroupCall()">Decline</button>
+            <h3>📞 Incoming Group Call</h3>
+            <div style="display:flex;align-items:center;gap:14px;margin:14px 0;">
+                <img id="incomingConvAvatar" src="" alt=""
+                     style="width:52px;height:52px;border-radius:50%;object-fit:cover;background:#e5e7eb;display:none;">
+                <div style="display:inline-block;width:52px;height:52px;border-radius:50%;background:#667eea;color:#fff;font-size:22px;font-weight:700;text-align:center;line-height:52px;display:none;" id="incomingConvAvatarFallback"></div>
+                <div>
+                    <div style="font-weight:700;font-size:16px;color:#111;" id="incomingConvName"></div>
+                    <div style="font-size:13px;color:#6b7280;">Group call</div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                <img id="incomingCallerAvatar" src="" alt=""
+                     style="width:36px;height:36px;border-radius:50%;object-fit:cover;background:#e5e7eb;display:none;">
+                <div style="display:inline-block;width:36px;height:36px;border-radius:50%;background:#10b981;color:#fff;font-size:14px;font-weight:700;text-align:center;line-height:36px;display:none;" id="incomingCallerAvatarFallback"></div>
+                <span style="color:#374151;" id="incomingCallFrom"></span>
+            </div>
+            <div style="display:flex;gap:12px;">
+                <button class="btn btn-primary" onclick="acceptGroupCall()">✅ Accept</button>
+                <button class="btn btn-danger" onclick="declineGroupCall()">❌ Decline</button>
+            </div>
         </div>
 
         <div class="group-call-join" id="groupCallJoinSection">
-            <span>📞 Group call in progress – you can join</span>
+            <div class="join-info">
+                <img id="joinConvAvatar" class="join-avatar" src="" alt="">
+                <div class="join-avatar-fallback" id="joinConvAvatarFallback"></div>
+                <span id="joinConvLabel">📞 Group call in progress – you can join</span>
+            </div>
             <button type="button" class="btn-join" id="btnJoinGroupCall" onclick="joinActiveGroupCall()">Join</button>
         </div>
 
         <div class="video-section" id="videoSection">
-            <h2 style="color: #667eea; margin-bottom: 20px;">Video Call</h2>
+            <div class="call-header">
+                <img id="callHeaderAvatar" class="call-header-avatar" src="" alt="">
+                <div class="call-header-avatar-fallback" id="callHeaderAvatarFallback"></div>
+                <div class="call-header-info">
+                    <h2 id="callHeaderTitle">Group Call</h2>
+                    <p id="callHeaderSub">In call</p>
+                </div>
+            </div>
             <div class="video-grid" id="videoGrid"></div>
             <div class="controls-bar">
                 <button class="btn btn-primary" id="toggleAudio" onclick="toggleAudio()">
@@ -456,6 +615,8 @@
         let device = null;
         let pendingGroupCall = null; // { callerId, conversationId, callType, callerInfo }
         let activeGroupCallConversationId = null; // conversationId that has an active call (show "you can join")
+        let activeConversationInfo = null; // { id, name, avatar } for the current active group call
+        let socketParticipantInfo = new Map(); // socketId → { userId, name, avatar }
 
         // Wait for mediasoup-client to load
         function waitForMediasoupClient() {
@@ -636,14 +797,68 @@
 
                 socket.on('group_call_incoming', (data) => {
                     pendingGroupCall = data;
-                    document.getElementById('incomingCallFrom').textContent =
-                        (data.callerInfo && data.callerInfo.name) ? data.callerInfo.name + ' is calling this group' : 'Incoming group call';
+
+                    // Conversation info
+                    const conv = data.conversationInfo || {};
+                    const convName = conv.name || 'Group Call';
+                    document.getElementById('incomingConvName').textContent = convName;
+                    const convAvatarEl = document.getElementById('incomingConvAvatar');
+                    const convFallbackEl = document.getElementById('incomingConvAvatarFallback');
+                    if (conv.avatar) {
+                        convAvatarEl.src = conv.avatar;
+                        convAvatarEl.style.display = 'block';
+                        convFallbackEl.style.display = 'none';
+                    } else {
+                        convAvatarEl.style.display = 'none';
+                        convFallbackEl.textContent = convName.charAt(0).toUpperCase();
+                        convFallbackEl.style.display = 'inline-block';
+                    }
+
+                    // Caller info
+                    const caller = data.callerInfo || {};
+                    const callerName = caller.name || `User ${data.callerId}`;
+                    document.getElementById('incomingCallFrom').textContent = `${callerName} is calling`;
+                    const callerAvatarEl = document.getElementById('incomingCallerAvatar');
+                    const callerFallbackEl = document.getElementById('incomingCallerAvatarFallback');
+                    if (caller.avatar) {
+                        callerAvatarEl.src = caller.avatar;
+                        callerAvatarEl.style.display = 'block';
+                        callerFallbackEl.style.display = 'none';
+                    } else {
+                        callerAvatarEl.style.display = 'none';
+                        callerFallbackEl.textContent = callerName.charAt(0).toUpperCase();
+                        callerFallbackEl.style.display = 'inline-block';
+                    }
+
                     document.getElementById('incomingCallSection').style.display = 'block';
                 });
 
                 socket.on('group_call_started', (data) => {
                     activeGroupCallConversationId = data.conversationId || null;
+                    if (data.conversationInfo) {
+                        activeConversationInfo = data.conversationInfo;
+                    }
                     updateGroupCallJoinVisibility();
+                    // Update join banner with conversation name + avatar
+                    const conv = data.conversationInfo || {};
+                    const convName = conv.name || 'Group Call';
+                    const joinLabel = document.getElementById('joinConvLabel');
+                    if (joinLabel) {
+                        joinLabel.textContent = `📞 "${convName}" call in progress – you can join`;
+                    }
+                    const joinAvatar = document.getElementById('joinConvAvatar');
+                    const joinFallback = document.getElementById('joinConvAvatarFallback');
+                    if (joinAvatar && joinFallback) {
+                        if (conv.avatar) {
+                            joinAvatar.src = conv.avatar;
+                            joinAvatar.style.display = 'block';
+                            joinFallback.style.display = 'none';
+                        } else {
+                            joinAvatar.style.display = 'none';
+                            joinFallback.textContent = convName.charAt(0).toUpperCase();
+                            joinFallback.style.display = 'flex';
+                        }
+                    }
                 });
 
                 socket.on('group_call_ended', (data) => {
@@ -653,8 +868,11 @@
                     updateGroupCallJoinVisibility();
                 });
 
-                socket.on('newProducer', async ({ producerId, kind, socketId }) => {
+                socket.on('newProducer', async ({ producerId, kind, socketId, participantInfo }) => {
                     if (!socket || socketId === socket.id) return;
+                    if (participantInfo) {
+                        socketParticipantInfo.set(socketId, participantInfo);
+                    }
                     let retries = 0;
                     while ((!recvTransport || !device || !device.loaded) && retries < 15) {
                         await new Promise(resolve => setTimeout(resolve, 100));
@@ -682,21 +900,23 @@
             }
         }
 
-        // Start group call: notify all members, then join the mediasoup room
+        // Start group call: server fetches caller + conversation info from DB automatically
         async function startGroupCall() {
             const userId = getUserId();
             const conversationId = getConversationId();
-            const username = document.getElementById('username').value;
             if (!userId || !conversationId) {
                 showError('Enter User ID and Conversation ID');
                 return;
+            }
+            // activeConversationInfo will be populated when group_call_started arrives;
+            // set a placeholder so the header is at least correct while waiting
+            if (!activeConversationInfo || activeConversationInfo.id !== conversationId) {
+                activeConversationInfo = { id: conversationId, name: 'Group Call', avatar: null };
             }
             socket.emit('group_call_initiate', {
                 callerId: userId,
                 conversationId: conversationId,
                 callType: 'video',
-                callerName: username || 'User',
-                callerAvatar: null
             });
             await joinRoom(conversationId);
         }
@@ -704,6 +924,9 @@
         async function acceptGroupCall() {
             if (!pendingGroupCall) return;
             const conversationId = pendingGroupCall.conversationId;
+            if (pendingGroupCall.conversationInfo) {
+                activeConversationInfo = pendingGroupCall.conversationInfo;
+            }
             document.getElementById('incomingCallSection').style.display = 'none';
             pendingGroupCall = null;
             await joinRoom(conversationId);
@@ -714,10 +937,33 @@
             pendingGroupCall = null;
         }
 
+        function updateCallHeader(convInfo) {
+            const conv = convInfo || activeConversationInfo || {};
+            const name = conv.name || 'Group Call';
+            const titleEl = document.getElementById('callHeaderTitle');
+            const subEl = document.getElementById('callHeaderSub');
+            const avatarEl = document.getElementById('callHeaderAvatar');
+            const fallbackEl = document.getElementById('callHeaderAvatarFallback');
+            if (titleEl) titleEl.textContent = name;
+            if (subEl) subEl.textContent = 'In call';
+            if (avatarEl && fallbackEl) {
+                if (conv.avatar) {
+                    avatarEl.src = conv.avatar;
+                    avatarEl.style.display = 'block';
+                    fallbackEl.style.display = 'none';
+                } else {
+                    avatarEl.style.display = 'none';
+                    fallbackEl.textContent = name.charAt(0).toUpperCase();
+                    fallbackEl.style.display = 'flex';
+                }
+            }
+        }
+
         async function joinRoom(roomId) {
             try {
                 currentRoomId = roomId;
                 updateStatus('in-call');
+                socketParticipantInfo.clear();
 
                 // Wait for mediasoup-client to be available
                 await waitForMediasoupClient();
@@ -760,6 +1006,9 @@
                     const consumePromises = existingProducers
                         .filter(producer => producer.socketId !== socket.id)
                         .map(async (producer) => {
+                            if (producer.participantInfo) {
+                                socketParticipantInfo.set(producer.socketId, producer.participantInfo);
+                            }
                             producerToSocket.set(producer.id, producer.socketId);
                             try {
                                 await consumeProducer(producer.id, producer.kind);
@@ -774,7 +1023,8 @@
                 document.getElementById('toggleAudio').textContent = '🔊 Unmute';
                 document.getElementById('toggleVideo').textContent = '📹 Video On';
 
-                // Show video section
+                // Show video section with conversation header
+                updateCallHeader(activeConversationInfo);
                 document.getElementById('setupSection').style.display = 'none';
                 document.getElementById('videoSection').classList.add('active');
                 document.getElementById('incomingCallSection').style.display = 'none';
@@ -1109,6 +1359,37 @@
             }
         }
 
+        function buildParticipantOverlay(name, avatar) {
+            const wrap = document.createElement('div');
+            wrap.className = 'video-participant-info';
+
+            const avatarWrap = document.createElement('div');
+            avatarWrap.className = 'participant-avatar-wrap';
+
+            if (avatar) {
+                const img = document.createElement('img');
+                img.className = 'participant-avatar';
+                img.src = avatar;
+                img.alt = name;
+                img.style.display = 'block';
+                avatarWrap.appendChild(img);
+            } else {
+                const fb = document.createElement('div');
+                fb.className = 'participant-avatar-fallback';
+                fb.textContent = (name || '?').charAt(0).toUpperCase();
+                fb.style.display = 'flex';
+                avatarWrap.appendChild(fb);
+            }
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'participant-name';
+            nameEl.textContent = name || 'Participant';
+
+            wrap.appendChild(avatarWrap);
+            wrap.appendChild(nameEl);
+            return wrap;
+        }
+
         function addLocalVideo(stream) {
             const videoGrid = document.getElementById('videoGrid');
             const videoContainer = document.createElement('div');
@@ -1121,12 +1402,11 @@
             video.playsInline = true;
             video.muted = true;
 
-            const label = document.createElement('div');
-            label.className = 'video-label';
-            label.textContent = 'You (Local)';
+            const localName = (document.getElementById('username') && document.getElementById('username').value) || 'You';
+            const overlay = buildParticipantOverlay(localName + ' (You)', null);
 
             videoContainer.appendChild(video);
-            videoContainer.appendChild(label);
+            videoContainer.appendChild(overlay);
             videoGrid.appendChild(videoContainer);
         }
 
@@ -1148,6 +1428,10 @@
             
             track.enabled = true;
             
+            const pInfo = socketParticipantInfo.get(socketId);
+            const pName = pInfo?.name || 'Participant';
+            const pAvatar = pInfo?.avatar || null;
+
             // Get or create video container
             let videoContainer = document.getElementById(`remote-${socketId}`);
             let video = document.getElementById(`video-${socketId}`);
@@ -1166,13 +1450,19 @@
                 video.playsInline = true;
                 video.muted = false;
                 video.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;background:#000';
-                
-                const label = document.createElement('div');
-                label.className = 'video-label';
-                label.textContent = 'Participant';
+
+                const overlay = buildParticipantOverlay(pName, pAvatar);
+                overlay.id = `overlay-${socketId}`;
                 
                 videoContainer.appendChild(video);
-                videoContainer.appendChild(label);
+                videoContainer.appendChild(overlay);
+            } else {
+                // Update overlay if participant info arrived after initial render
+                const existingOverlay = document.getElementById(`overlay-${socketId}`);
+                if (existingOverlay) existingOverlay.remove();
+                const overlay = buildParticipantOverlay(pName, pAvatar);
+                overlay.id = `overlay-${socketId}`;
+                videoContainer.appendChild(overlay);
             }
 
             // Set stream immediately (no delays)
@@ -1270,6 +1560,7 @@
                 consumers.clear();
                 producerToSocket.clear();
                 socketToStream.clear();
+                socketParticipantInfo.clear();
 
                 // Close transports
                 if (sendTransport) {

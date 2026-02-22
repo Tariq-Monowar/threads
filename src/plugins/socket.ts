@@ -12,12 +12,19 @@ import { getJsonArray } from "../utils/jsonArray";
 const prisma = new PrismaClient();
 
 // --- Mediasoup (group call / room) state ---
+type ParticipantInfo = {
+  userId: string;
+  name: string;
+  avatar: string | null;
+};
+
 type MediasoupParticipant = {
   roomId: string;
   router: mediasoup.types.Router;
   transports: Map<string, mediasoup.types.WebRtcTransport>;
   producers: Map<string, mediasoup.types.Producer>;
   consumers: Map<string, mediasoup.types.Consumer>;
+  participantInfo?: ParticipantInfo;
 };
 let mediasoupWorker: mediasoup.types.Worker | null = null;
 const mediasoupRooms = new Map<string, mediasoup.types.Router>();
@@ -70,8 +77,8 @@ async function getOrCreateMediasoupRouter(
 
 function getMediasoupProducersForRoom(
   roomId: string
-): Array<{ id: string; kind: string; socketId: string }> {
-  const list: Array<{ id: string; kind: string; socketId: string }> = [];
+): Array<{ id: string; kind: string; socketId: string; participantInfo?: ParticipantInfo }> {
+  const list: Array<{ id: string; kind: string; socketId: string; participantInfo?: ParticipantInfo }> = [];
   for (const [socketId, p] of mediasoupParticipants) {
     if (p.roomId !== roomId) continue;
     for (const producer of p.producers.values()) {
@@ -79,6 +86,7 @@ function getMediasoupProducersForRoom(
         id: producer.id,
         kind: producer.kind,
         socketId,
+        participantInfo: p.participantInfo,
       });
     }
   }
@@ -1062,18 +1070,37 @@ export default fp(async (fastify) => {
             return;
           }
           console.log("[createRoom] checking membership for userId", userId);
-          const isMember = await fastify.prisma.conversationMember.findFirst({
-            where: {
-              conversationId: roomId,
-              userId: Number(userId),
-              isDeleted: false,
-            },
-          });
-          if (!isMember) {
+          const [memberRow, conversation] = await Promise.all([
+            fastify.prisma.conversationMember.findFirst({
+              where: { conversationId: roomId, userId: Number(userId), isDeleted: false },
+              select: {
+                user: { select: { id: true, name: true, avatar: true } },
+              },
+            }),
+            fastify.prisma.conversation.findUnique({
+              where: { id: roomId },
+              select: { id: true, name: true, avatar: true },
+            }),
+          ]);
+
+          if (!memberRow) {
             console.log("[createRoom] rejected: user not in group", userId);
             cb({ error: "You are not in this group" });
             return;
           }
+
+          const pInfo: ParticipantInfo = {
+            userId,
+            name: memberRow.user?.name ?? `User ${userId}`,
+            avatar: memberRow.user?.avatar ? FileService.avatarUrl(memberRow.user.avatar) : null,
+          };
+
+          const conversationInfo = {
+            id: roomId,
+            name: conversation?.name ?? "Group Call",
+            avatar: conversation?.avatar ? FileService.avatarUrl(conversation.avatar) : null,
+          };
+
           const wasEmpty = isMediasoupRoomEmpty(roomId);
           console.log("[createRoom] room was empty:", wasEmpty, "→ creating/joining router");
           const router = await getOrCreateMediasoupRouter(roomId);
@@ -1083,6 +1110,7 @@ export default fp(async (fastify) => {
             transports: new Map(),
             producers: new Map(),
             consumers: new Map(),
+            participantInfo: pInfo,
           });
           socket.join(roomId);
           if (wasEmpty) {
@@ -1092,7 +1120,12 @@ export default fp(async (fastify) => {
               select: { userId: true },
             });
             for (const m of members) {
-              if (m.userId) io.to(String(m.userId)).emit("group_call_started", { conversationId: roomId });
+              if (m.userId) {
+                io.to(String(m.userId)).emit("group_call_started", {
+                  conversationId: roomId,
+                  conversationInfo,
+                });
+              }
             }
           }
           console.log("[createRoom] success for socket", socket.id, "roomId", roomId);
@@ -1217,6 +1250,7 @@ export default fp(async (fastify) => {
             producerId: producer.id,
             kind: producer.kind,
             socketId: socket.id,
+            participantInfo: p!.participantInfo,
           });
           cb({ id: producer.id });
         } catch (err: any) {
@@ -1375,27 +1409,22 @@ export default fp(async (fastify) => {
       }
     });
 
-    // Group call: verify caller is in group, then notify members (no DB save)
+    // Group call: verify caller is in group, fetch DB info, send push + socket to all members
     socket.on(
       "group_call_initiate",
       async ({
         callerId,
         conversationId,
         callType = "video",
-        callerName,
-        callerAvatar,
       }: {
         callerId: string;
         conversationId: string;
         callType?: CallType;
-        callerName?: string;
-        callerAvatar?: string;
       }) => {
         console.log("[group_call_initiate] received", {
           callerId,
           conversationId,
           callType,
-          callerName,
           socketId: socket.id,
         });
 
@@ -1404,57 +1433,129 @@ export default fp(async (fastify) => {
           return;
         }
 
+        const callerIdNumber = Number(callerId);
+        if (Number.isNaN(callerIdNumber)) {
+          socket.emit("group_call_error", { message: "Invalid caller id" });
+          return;
+        }
+
         try {
+          // 1. Fetch conversation + members (with user FCM tokens + profile)
+          const conversation = await fastify.prisma.conversation.findUnique({
+            where: { id: conversationId },
+            select: { id: true, name: true, avatar: true },
+          });
+
           const members = await fastify.prisma.conversationMember.findMany({
             where: {
               conversationId,
               isDeleted: false,
               userId: { not: null },
             },
-            select: { userId: true },
+            select: {
+              userId: true,
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  avatar: true,
+                  fcmToken: true,
+                },
+              },
+            },
           });
 
-          const memberIds = members.map((m) => m.userId).filter((id): id is number => id != null);
-          console.log("[group_call_initiate] conversation members (userId)", memberIds);
+          const memberIds = members
+            .map((m) => m.userId)
+            .filter((id): id is number => id != null);
+          console.log("[group_call_initiate] members", memberIds);
 
-          const callerIsMember = members.some((m) => m.userId !== null && String(m.userId) === callerId);
+          // 2. Verify caller is a member
+          const callerIsMember = memberIds.some((id) => String(id) === callerId);
           if (!callerIsMember) {
-            console.log("[group_call_initiate] caller not in group → sending group_call_error to caller", callerId);
-            const callerSockets = getSocketsForUser(callerId);
-            if (callerSockets?.size) {
-              io.to(callerId).emit("group_call_error", { message: "You are not in this group" });
-            }
+            console.log("[group_call_initiate] caller not in group");
+            socket.emit("group_call_error", { message: "You are not in this group" });
             return;
           }
 
-          const memberUserIds = memberIds.filter((id) => String(id) !== callerId);
-          console.log("[group_call_initiate] ringing these members (excluding caller)", memberUserIds);
-
+          // 3. Build caller info from DB
+          const callerRow = members.find((m) => String(m.userId) === callerId)?.user;
           const callerInfo = {
-            id: Number(callerId),
-            name: callerName ?? `User ${callerId}`,
-            avatar: callerAvatar ? FileService.avatarUrl(callerAvatar) : null,
+            id: callerIdNumber,
+            name: callerRow?.name ?? `User ${callerId}`,
+            avatar: callerRow?.avatar ? FileService.avatarUrl(callerRow.avatar) : null,
           };
 
-          for (const userId of memberUserIds) {
-            const userIdStr = String(userId);
+          // 4. Build conversation info
+          const conversationInfo = {
+            id: conversationId,
+            name: conversation?.name ?? "Group Call",
+            avatar: conversation?.avatar ? FileService.avatarUrl(conversation.avatar) : null,
+          };
+
+          console.log("[group_call_initiate] callerInfo", callerInfo);
+          console.log("[group_call_initiate] conversationInfo", conversationInfo);
+
+          // 5. Notify every other member: socket event + push notification
+          const otherMembers = members.filter((m) => String(m.userId) !== callerId);
+          console.log("[group_call_initiate] notifying members", otherMembers.map((m) => m.userId));
+
+          for (const member of otherMembers) {
+            if (!member.userId) continue;
+            const userIdStr = String(member.userId);
+
+            // Socket event (online users)
             const sockets = getSocketsForUser(userIdStr);
             if (sockets && sockets.size > 0) {
-              console.log("[group_call_initiate] emitting group_call_incoming to user", userIdStr);
+              console.log("[group_call_initiate] socket → group_call_incoming to", userIdStr);
               io.to(userIdStr).emit("group_call_incoming", {
                 callerId,
                 conversationId,
                 callType,
                 callerInfo,
+                conversationInfo,
               });
             } else {
-              console.log("[group_call_initiate] user", userIdStr, "has no connected sockets (offline)");
+              console.log("[group_call_initiate] user", userIdStr, "offline – push only");
+            }
+
+            // Push notification (all members, including offline)
+            const tokens = getJsonArray<string>(member.user?.fcmToken, []).filter(Boolean);
+            if (tokens.length > 0) {
+              const pushData: Record<string, string> = {
+                type: "group_call_initiate",
+                success: "true",
+                title: conversationInfo.name,
+                body: `${callerInfo.name} is calling`,
+                message: `${callerInfo.name} started a group call`,
+                conversationId,
+                data: JSON.stringify({
+                  callerId: String(callerId),
+                  callType: String(callType),
+                  conversationId,
+                  callerInfo,
+                  conversationInfo,
+                }),
+              };
+              for (const token of tokens) {
+                fastify.sendDataPush(token, pushData).catch((err: any) => {
+                  console.warn("[group_call_initiate] push failed for", userIdStr, err?.message);
+                });
+              }
+              console.log("[group_call_initiate] push sent to", userIdStr, `(${tokens.length} tokens)`);
             }
           }
 
+          // 6. Tell every member (including caller) that a call is active so they can join
           console.log("[group_call_initiate] emitting group_call_started to all members");
           for (const m of members) {
-            if (m.userId) io.to(String(m.userId)).emit("group_call_started", { conversationId });
+            if (m.userId) {
+              io.to(String(m.userId)).emit("group_call_started", {
+                conversationId,
+                callerInfo,
+                conversationInfo,
+              });
+            }
           }
           console.log("[group_call_initiate] done");
         } catch (err: any) {

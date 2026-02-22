@@ -13,15 +13,16 @@
 5. [Socket Events Reference](#socket-events-reference)
    - [Events You Emit (Client → Server)](#events-you-emit-client--server)
    - [Events You Listen To (Server → Client)](#events-you-listen-to-server--client)
-6. [Full Call Flow — Step by Step](#full-call-flow--step-by-step)
+6. [Active Calls on Login / App Open](#active-calls-on-login--app-open)
+7. [Full Call Flow — Step by Step](#full-call-flow--step-by-step)
    - [Caller Side](#caller-side)
    - [Receiver Side](#receiver-side)
    - [Joining a Call Already in Progress](#joining-a-call-already-in-progress)
-7. [MediaSoup WebRTC Setup](#mediasoup-webrtc-setup)
-8. [Participant Info & Conversation Info](#participant-info--conversation-info)
-9. [Data Shapes](#data-shapes)
-10. [Error Handling](#error-handling)
-11. [Edge Cases](#edge-cases)
+8. [MediaSoup WebRTC Setup](#mediasoup-webrtc-setup)
+9. [Participant Info & Conversation Info](#participant-info--conversation-info)
+10. [Data Shapes](#data-shapes)
+11. [Error Handling](#error-handling)
+12. [Edge Cases](#edge-cases)
 
 ---
 
@@ -97,6 +98,32 @@ Register your user on connect.
 
 ```js
 socket.emit('join', userId); // string
+```
+
+---
+
+#### `get_active_calls` *(with optional callback)*
+Request the list of group calls currently active in the user's conversations on-demand. Useful when the user opens the conversation list screen or pulls to refresh.
+
+Uses the same optimized memory-first path as `join` — if no calls are active globally, the database is never queried.
+
+```js
+// Option A — with ack callback (recommended)
+socket.emit('get_active_calls', {}, (res) => {
+  if (res.error) return;
+  // res.calls — array of active call entries, or [] if none
+  res.calls.forEach(call => {
+    showCallBadge(call.conversationId, call.conversationInfo, call.participantCount);
+  });
+});
+
+// Option B — without callback (server emits 'active_group_calls' event back)
+socket.emit('get_active_calls', {});
+socket.on('active_group_calls', (res) => {
+  res.calls.forEach(call => {
+    showCallBadge(call.conversationId, call.conversationInfo, call.participantCount);
+  });
+});
 ```
 
 ---
@@ -224,6 +251,25 @@ socket.emit('leaveRoom');
 
 ### Events You Listen To (Server → Client)
 
+#### `active_group_calls`
+Fired automatically after `join` completes **if** the user has at least one active call in their conversations. Also fired as the response to `get_active_calls` when no callback is provided.
+
+```js
+socket.on('active_group_calls', (data) => {
+  // data.calls — Array of active call entries ([] is never sent — event is skipped)
+  data.calls.forEach(call => {
+    // call.conversationId   — string
+    // call.conversationInfo — { id, name, avatar }
+    // call.participantCount — number of people currently in the call
+    showJoinCallBanner(call);
+  });
+});
+```
+
+> When there are no active calls, this event is **not fired** on `join` (to avoid unnecessary work). Use `get_active_calls` with a callback if you need an explicit empty-state confirmation.
+
+---
+
 #### `group_call_incoming`
 Fired on all online group members (except the caller) when someone starts a call.
 
@@ -304,6 +350,100 @@ socket.on('participantLeft', ({ socketId }) => {
 
 ---
 
+## Active Calls on Login / App Open
+
+When a user opens the app (or reconnects after being offline), they need to know which of their group conversations already have a call running — so they can show a "Join call" banner on each conversation tile.
+
+### How it works
+
+The server keeps all active MediaSoup rooms in an **in-memory Map**. When `join` completes, the server uses a two-step optimized lookup:
+
+1. **Memory check (free, no DB)** — read the list of currently active room IDs from the in-memory `mediasoupRooms` map. If zero rooms are active globally, the flow stops here — the database is never touched.
+2. **Tiny targeted DB query (only when needed)** — if active rooms exist, query only the rows where `userId = me AND conversationId IN (<active room ids>)`. This returns at most a handful of rows regardless of how many groups the user is in.
+3. **Participant count (free, no DB)** — counted from the in-memory `mediasoupParticipants` map.
+4. Emits `active_group_calls` back **only to the joining socket**.
+
+```
+User opens app
+      │
+      ├── socket.emit('join', userId)
+      │       │
+      │       ├── [memory] check active rooms → 0 active? → done, no DB hit
+      │       │
+      │       └── [DB] SELECT WHERE userId=me AND conversationId IN (active ids)
+      │                  ↓ (returns only 0–N rows, N = active rooms user is in)
+      └── server → socket.emit('active_group_calls', { calls: [...] })
+                         │
+                         ├── conversationId
+                         ├── conversationInfo { id, name, avatar }
+                         └── participantCount  ← from memory, no extra DB call
+```
+
+> **Performance guarantee:** If nobody is on a call anywhere, zero DB queries are made on `join`. If 2 calls are active and the user is in 50 groups, only 2 rows are fetched — not 50.
+
+### Recommended implementation
+
+```js
+// On app start / socket reconnect
+socket.on('connect', () => {
+  socket.emit('join', userId);
+});
+
+// Fires automatically after join — only if the user has active calls
+socket.on('active_group_calls', ({ calls }) => {
+  calls.forEach(({ conversationId, conversationInfo, participantCount }) => {
+    // Show a "● Live · N people" badge on that conversation tile
+    markConversationAsLive(conversationId, conversationInfo, participantCount);
+  });
+});
+
+// Remove the badge when the call ends
+socket.on('group_call_ended', ({ conversationId }) => {
+  clearConversationLiveBadge(conversationId);
+});
+```
+
+### On-demand refresh
+
+If you need to re-check at any time (e.g. user pulls to refresh the conversation list):
+
+```js
+// With ack callback (recommended)
+socket.emit('get_active_calls', {}, (res) => {
+  if (res.error) return;
+  refreshCallBadges(res.calls); // res.calls may be [] if nothing is active
+});
+
+// Without callback — server fires 'active_group_calls' back
+socket.emit('get_active_calls', {});
+```
+
+> `get_active_calls` uses the **same optimized path** as `join` — memory-first, minimal DB.
+
+### Active call entry shape
+
+```ts
+{
+  conversationId: string;
+  conversationInfo: {
+    id: string;
+    name: string;
+    avatar: string | null; // full URL — may be null, show initials as fallback
+  };
+  participantCount: number; // how many people are currently in the call
+}
+```
+
+### What triggers `active_group_calls`
+
+| Trigger | Fires to |
+|---|---|
+| User emits `join` and has active calls | That socket only |
+| User emits `get_active_calls` without callback | That socket only |
+| User emits `get_active_calls` with callback | Returned via callback only |
+
+---
+
 ## Full Call Flow — Step by Step
 
 ### Caller Side
@@ -337,13 +477,27 @@ socket.on('participantLeft', ({ socketId }) => {
 
 ### Joining a Call Already in Progress
 
+There are two ways a user discovers an active call:
+
+**While online (real-time):**
 ```
 1. Listen for 'group_call_started'  → show "Join call" banner
 2. Listen for 'group_call_ended'    → hide "Join call" banner
-3. On user taps "Join":
-   socket.emit('createRoom', { roomId: conversationId }, cb)
+```
+
+**After opening the app / reconnecting (catch-up):**
+```
+1. socket.emit('join', userId)
+   → server automatically fires 'active_group_calls' if any calls are running
+   → show "Join call" banners for each entry in calls[]
+2. Listen for 'group_call_ended' → hide those banners
+```
+
+**Once the user taps "Join" (both cases are identical):**
+```
+3. socket.emit('createRoom', { roomId: conversationId }, cb)
    → Follow steps 3–8 from Caller Side
-   → Use 'getProducers' to get all current streams
+   → socket.emit('getProducers') to consume everyone already in the call
 ```
 
 ---
@@ -403,7 +557,9 @@ The server automatically fetches names and avatars from the database. You never 
 |---|---|---|
 | Incoming call UI | `callerInfo.name`, `callerInfo.avatar` | `group_call_incoming` |
 | Incoming call UI | `conversationInfo.name`, `conversationInfo.avatar` | `group_call_incoming` |
-| "Join call" banner | `conversationInfo.name`, `conversationInfo.avatar` | `group_call_started` |
+| "Join call" banner (real-time) | `conversationInfo.name`, `conversationInfo.avatar` | `group_call_started` |
+| "Join call" banner (on app open) | `conversationInfo.name`, `conversationInfo.avatar` | `active_group_calls` |
+| "Join call" badge count | `participantCount` | `active_group_calls` / `get_active_calls` |
 | Video tile label | `participantInfo.name`, `participantInfo.avatar` | `newProducer` |
 | Video tile label (late joiners) | `participantInfo` in each producer | `getProducers` callback |
 
@@ -442,6 +598,20 @@ The server automatically fetches names and avatars from the database. You never 
 ---
 
 ## Data Shapes
+
+### Active call entry (from `active_group_calls` and `get_active_calls`)
+
+```ts
+{
+  conversationId: string;
+  conversationInfo: {
+    id: string;
+    name: string;
+    avatar: string | null;
+  };
+  participantCount: number;
+}
+```
 
 ### `socketRequest` helper (recommended pattern)
 
@@ -496,10 +666,20 @@ function socketRequest(event, data = {}) {
 | `createRoom` callback `error: "Join first..."` | `join` was not emitted before `createRoom` | Emit `join` first, then retry |
 | `createRoom` callback `error: "You are not in this group"` | User is not a member of the conversation | Do not proceed |
 | `consume` callback `error: "RTP capabilities mismatch"` | Device not loaded yet | Wait for device load, retry |
+| `get_active_calls` callback `error: "Not joined"` | `join` not emitted yet | Emit `join` first |
 
 ---
 
 ## Edge Cases
+
+**User opens app while a call is running:**
+`active_group_calls` fires automatically after `join`. No extra emit needed. The server does a memory-first check so this is fast even with many users connecting at once.
+
+**No calls are active anywhere:**
+`active_group_calls` is not emitted after `join` at all — zero events, zero DB queries. Use `get_active_calls` with a callback if your screen needs an explicit empty-state confirmation.
+
+**User is in 100 groups, 2 have active calls:**
+Only 2 DB rows are fetched — the query uses `conversationId IN (active room ids)`, not a full membership scan.
 
 **User joins mid-call:**
 Call `getProducers` right after `createRoom` to get all existing streams. Each producer in the list includes `participantInfo` for labelling the video tile.
@@ -523,12 +703,15 @@ The server emits to the `userId` room, so both devices receive events. Each devi
 
 ## Summary Diagram
 
+### Starting a call
+
 ```
 Caller                    Server                    Other Members
   │                          │                           │
   │── join(userId) ─────────►│                           │
-  │── group_call_initiate ──►│── group_call_incoming ───►│
-  │                          │── group_call_started ─────►│ (all)
+  │                          │── active_group_calls ─────►│  (if calls already active)
+  │── group_call_initiate ──►│── group_call_incoming ───►│  (online members only)
+  │                          │── group_call_started ─────►│  (all members)
   │── createRoom ───────────►│                           │
   │◄─ rtpCapabilities ───────│                           │
   │── createTransport (send)►│                           │
@@ -537,11 +720,40 @@ Caller                    Server                    Other Members
   │── produce (audio) ──────►│── newProducer ────────────►│
   │── produce (video) ──────►│── newProducer ────────────►│
   │                          │                           │
-  │                          │  [Member accepts]         │
-  │                          │◄── createRoom ────────────│
-  │                          │◄── produce (audio/video) ─│
-  │◄─ newProducer ───────────│                           │
-  │                          │                           │
   │── leaveRoom ────────────►│── participantLeft ─────────►│
-  │                          │── group_call_ended (if empty)►│
+  │                          │── group_call_ended ────────►│  (if room now empty)
+```
+
+### Member joining a call already in progress
+
+```
+Late Joiner               Server                    In-call Participants
+  │                          │                           │
+  │── join(userId) ─────────►│                           │
+  │◄─ active_group_calls ────│  [memory-first, fast]     │
+  │   { conversationId,      │                           │
+  │     conversationInfo,    │                           │
+  │     participantCount }   │                           │
+  │                          │                           │
+  │  [user taps Join]        │                           │
+  │── createRoom ───────────►│                           │
+  │◄─ rtpCapabilities ───────│                           │
+  │── createTransport x2 ───►│                           │
+  │── connectTransport ─────►│                           │
+  │── getProducers ─────────►│                           │
+  │◄─ producers[] ───────────│  (each with participantInfo)
+  │── consume (each) ───────►│                           │
+  │── produce (audio) ──────►│── newProducer ────────────►│
+  │── produce (video) ──────►│── newProducer ────────────►│
+```
+
+### On-demand active call check
+
+```
+Any User                  Server
+  │                          │
+  │── get_active_calls ─────►│
+  │                          ├── [memory] active room ids → [] ? → return calls: []
+  │                          └── [DB] WHERE userId=me AND convId IN (active ids)
+  │◄─ callback({ calls })────│  (or 'active_group_calls' event if no callback)
 ```

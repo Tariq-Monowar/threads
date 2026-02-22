@@ -115,6 +115,26 @@ function isMediasoupRoomEmpty(roomId: string): boolean {
   return ![...mediasoupParticipants.values()].some((p) => p.roomId === roomId);
 }
 
+// Returns the list of active room IDs (conversationIds) that intersect with the given list
+function getActiveRoomsForConversations(conversationIds: string[]): string[] {
+  const activeSet = new Set(mediasoupRooms.keys());
+  return conversationIds.filter((id) => activeSet.has(id));
+}
+
+// All currently active room IDs (pure memory — no DB)
+function getAllActiveRoomIds(): string[] {
+  return [...mediasoupRooms.keys()];
+}
+
+// Participant count per room (pure memory — no DB)
+function getParticipantCount(roomId: string): number {
+  let count = 0;
+  for (const p of mediasoupParticipants.values()) {
+    if (p.roomId === roomId) count++;
+  }
+  return count;
+}
+
 export default fp(async (fastify) => {
   await createMediasoupWorker();
   fastify.log.info("Mediasoup worker ready");
@@ -171,7 +191,7 @@ export default fp(async (fastify) => {
     const getUserId = () => getUserIdBySocket(socket.id);
 
     // 1. User Join
-    socket.on("join", (userId: string) => {
+    socket.on("join", async (userId: string) => {
       if (!userId) {
         return;
       }
@@ -180,9 +200,110 @@ export default fp(async (fastify) => {
       socket.join(userId);
 
       io.emit("online-users", getOnlineUserIds());
+
+      // Send back any group calls currently active in the user's conversations.
+      // Optimized: check memory first — only hit the DB for the (usually tiny)
+      // set of rooms that are actually live right now.
+      setImmediate(async () => {
+        try {
+          const activeRoomIds = getAllActiveRoomIds();
+          if (activeRoomIds.length === 0) return; // nothing active globally → skip DB entirely
+
+          const userIdInt = parseInt(userId);
+          if (Number.isNaN(userIdInt)) return;
+
+          // Single query: only the active rooms, only this user's membership rows
+          const rows = await fastify.prisma.conversationMember.findMany({
+            where: {
+              userId: userIdInt,
+              isDeleted: false,
+              conversationId: { in: activeRoomIds },
+            },
+            select: {
+              conversationId: true,
+              conversation: { select: { id: true, name: true, avatar: true } },
+            },
+          });
+
+          if (rows.length === 0) return;
+
+          const activeCalls = rows.map((row) => ({
+            conversationId: row.conversationId,
+            conversationInfo: {
+              id: row.conversationId,
+              name: row.conversation?.name ?? "Group Call",
+              avatar: row.conversation?.avatar
+                ? FileService.avatarUrl(row.conversation.avatar)
+                : null,
+            },
+            participantCount: getParticipantCount(row.conversationId),
+          }));
+
+          socket.emit("active_group_calls", { calls: activeCalls });
+        } catch (_) {
+          // Non-critical — don't break the join flow
+        }
+      });
     });
 
-    // 2. Typing Indicators (based on conversation rooms)
+    // 2. Get active group calls for this user's conversations (on-demand)
+    socket.on(
+      "get_active_calls",
+      async (
+        _data: unknown,
+        cb?: (arg: {
+          calls?: Array<{
+            conversationId: string;
+            conversationInfo: { id: string; name: string; avatar: string | null };
+            participantCount: number;
+          }>;
+          error?: string;
+        }) => void
+      ) => {
+        const respond = cb ?? ((data: any) => socket.emit("active_group_calls", data));
+        try {
+          const userId = getUserIdBySocket(socket.id);
+          if (!userId) { respond({ error: "Not joined" }); return; }
+
+          const activeRoomIds = getAllActiveRoomIds();
+          if (activeRoomIds.length === 0) { respond({ calls: [] }); return; }
+
+          const userIdInt = parseInt(userId);
+          if (Number.isNaN(userIdInt)) { respond({ error: "Invalid user id" }); return; }
+
+          // Only query rows where: this user + active room + not deleted
+          const rows = await fastify.prisma.conversationMember.findMany({
+            where: {
+              userId: userIdInt,
+              isDeleted: false,
+              conversationId: { in: activeRoomIds },
+            },
+            select: {
+              conversationId: true,
+              conversation: { select: { id: true, name: true, avatar: true } },
+            },
+          });
+
+          const calls = rows.map((row) => ({
+            conversationId: row.conversationId,
+            conversationInfo: {
+              id: row.conversationId,
+              name: row.conversation?.name ?? "Group Call",
+              avatar: row.conversation?.avatar
+                ? FileService.avatarUrl(row.conversation.avatar)
+                : null,
+            },
+            participantCount: getParticipantCount(row.conversationId),
+          }));
+
+          respond({ calls });
+        } catch (err: any) {
+          respond({ error: err?.message ?? "get_active_calls failed" });
+        }
+      }
+    );
+
+    // 3. Typing Indicators (based on conversation rooms)
     const handleTyping = (
       eventType: "start_typing" | "stop_typing",
       isTyping: boolean
@@ -1382,6 +1503,35 @@ export default fp(async (fastify) => {
           console.error("[resumeConsumer] failed", err);
           cb({ error: err?.message || "resumeConsumer failed" });
         }
+      }
+    );
+
+    // Participant sends both camera and mic state at once
+    socket.on(
+      "media_state_change",
+      ({
+        video,
+        audio,
+      }: {
+        video: boolean;
+        audio: boolean;
+      }) => {
+        const p = mediasoupParticipants.get(socket.id);
+        if (!p) {
+          console.log("[media_state_change] ignored: socket not in any room");
+          return;
+        }
+        console.log(
+          `[media_state_change] socket ${socket.id} → video:${video} audio:${audio} in room ${p.roomId}`
+        );
+        // Broadcast to everyone else in the room — same shape + userInfo attached
+        socket.to(p.roomId).emit("media_state_change", {
+          video,
+          audio,
+          conversationId: p.roomId,
+          socketId: socket.id,
+          userInfo: p.participantInfo ?? null,
+        });
       }
     );
 

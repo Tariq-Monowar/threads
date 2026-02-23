@@ -16,6 +16,7 @@ export default fp(async (fastify) => {
 });
 
 declare module "fastify" {
+  
   interface FastifyInstance {
     redis: Redis;
   }

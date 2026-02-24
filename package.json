@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon --exec ts-node index.ts",
-    "build": "tsc",
-    "start": "node build/index.js",
+    "dev": "node init && nodemon --exec ts-node index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node build/index.js",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "migrate:postgres-to-mysql": "ts-node scripts/migrate-postgres-to-mysql-simple.ts",
